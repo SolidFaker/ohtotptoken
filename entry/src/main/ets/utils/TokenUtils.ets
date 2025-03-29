@@ -102,7 +102,9 @@ export function intArrayToString(input: ArrayBuffer): string {
 }
 
 export function stringToIntArray(input: string): Uint8Array {
-  return Uint8Array.from(input, c => c.charCodeAt(0))
+  // 原写法会导致数据中有中文（或其他由多字节编码的字符）时，截断
+  // return Uint8Array.from(input, c => c.charCodeAt(0))
+  return new Uint8Array(buffer.from(input).buffer)
 }
 
 export function base32Encode(
