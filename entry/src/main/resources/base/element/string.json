@@ -386,7 +386,11 @@
     },
     {
       "name": "token_copy_guide_popup",
-      "value": "Long press to copy the token"
+      "value": "Tips:Long press to copy the token"
+    },
+    {
+      "name": "token_copy_guide_popup_Confirm",
+      "value": "Confirm"
     },
     {
       "name": "token_copied",

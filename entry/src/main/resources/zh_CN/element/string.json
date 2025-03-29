@@ -386,7 +386,11 @@
     },
     {
       "name": "token_copy_guide_popup",
-      "value": "长按可复制令牌"
+      "value": "小提示:长按可复制令牌、点击可切换隐藏/显示令牌状态"
+    },
+    {
+      "name": "token_copy_guide_popup_Confirm",
+      "value": "我知道啦"
     },
     {
       "name": "token_copied",
