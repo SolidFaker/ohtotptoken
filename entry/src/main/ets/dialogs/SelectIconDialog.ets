@@ -13,7 +13,7 @@ export struct SelectIconDialog {
 
   @State selected_icon_path: string = '';
 
-  @State icon_matched_with_issuer: string[] = [''];
+  @State icon_matched_with_issuer: string[] = [TokenIconPacks.getIconByIssuer(this.issuer)];
   @State default_icon_pack_visible: boolean = true;
   @State aegis_icon_pack_visible: boolean[] = [];
 
@@ -24,13 +24,13 @@ export struct SelectIconDialog {
   aboutToAppear(): void {
     // find issuer's icon
     const default_icon = TokenIconPacks.default_icon_pack.getIconPathByIssuer(this.issuer);
-    if (default_icon !== '') {
+    if (default_icon !== '' && !this.icon_matched_with_issuer.includes(default_icon)){
       this.icon_matched_with_issuer.push(default_icon);
     }
     TokenIconPacks.aegis_icon_packs.forEach((aegis_icon_pack) => {
       const aegis_icon = aegis_icon_pack.getIconPathByIssuer(this.issuer);
       this.aegis_icon_pack_visible.push(false);
-      if (aegis_icon !== '') {
+      if (aegis_icon !== ''&& !this.icon_matched_with_issuer.includes(aegis_icon)) {
         this.icon_matched_with_issuer.push(aegis_icon);
       }
     });
@@ -68,8 +68,9 @@ export struct SelectIconDialog {
     ListItem() {
       Stack( { alignContent: Alignment.TopStart } ) {
         if (path === '') {
-          Text($r('app.string.dialog_icon_default'))
-            .margin({ top: 15 })
+          // Text($r('app.string.dialog_icon_default'))
+          //   .margin({ top: 15 })
+          TokenIcon({ issuer: this.issuer, icon_path: path, bypassColorFilter: true })
         } else {
           TokenIcon({ issuer: '', icon_path: path, bypassColorFilter: true })
         }
