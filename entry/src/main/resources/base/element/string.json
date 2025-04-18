@@ -419,6 +419,38 @@
     {
       "name": "token_search_placeholder",
       "value": "Search..."
+    },
+    {
+      "name": "toast_backup_success",
+      "value": "Backup Succeeded"
+    },
+    {
+      "name": "toast_wrong_forti_token",
+      "value": "ERROR: Wrong Forti Token!"
+    },
+    {
+      "name": "toast_wrong_device_id",
+      "value": "ERROR: Wrong Device ID!"
+    },
+    {
+      "name": "toast_wrong_user_token",
+      "value": "ERROR: Wrong User Token!"
+    },
+    {
+      "name": "toast_token_update",
+      "value": "Token ISSUER:TOKEN_NAME updated."
+    },
+    {
+      "name": "toast_multi_token_update",
+      "value": "LENGTH token(s) updated."
+    },
+    {
+      "name": "toast_icon_pack_invalid",
+      "value": "Invalid aegis icon pack"
+    },
+    {
+      "name": "toast_icon_pack_already_installed",
+      "value": "Already installed"
     }
   ]
 }

@@ -85,7 +85,7 @@ export struct SettingPage {
             const backup: TokenBackup = new TokenBackup(this.versionCode ?? 0, this.arrConf);
             if (uris[0] !== undefined && uris[0] !== '') {
               saveBackupToFile(uris[0], backup, true, password).then(() => {
-                promptAction.showToast({ message: "Backup Success" });
+                promptAction.showToast({ message: $r('app.string.toast_backup_success') });
               }).catch((reason: BusinessError) => {
                 promptAction.showToast({ message: reason.message });
               });
@@ -187,7 +187,7 @@ export struct SettingPage {
                 const backup: TokenBackup = new TokenBackup(this.versionCode, this.arrConf);
                 if (uris[0] !== undefined && uris[0] !== '') {
                   saveBackupToFile(uris[0], backup).then(() => {
-                    promptAction.showToast({ message: "Backup Success" });
+                    promptAction.showToast({ message: $r('app.string.toast_backup_success') });
                   }).catch((reason: BusinessError) => {
                     promptAction.showToast({ message: reason.message });
                   });

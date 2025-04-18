@@ -297,7 +297,8 @@ struct Index {
   async updateTokenConfig(conf: TokenConfig, toast: boolean = true): Promise<void> {
     await tkStore.updateToken(conf);
     if (toast) {
-      promptAction.showToast({message: `token ${conf.TokenIssuer}:${conf.TokenName} updated.`})
+      const message = $r('app.string.toast_token_update');
+      promptAction.showToast({message: `${message}`.replace("ISSUER", conf.TokenIssuer).replace("TOKEN_NAME", conf.TokenName)})
     }
   }
 
@@ -308,7 +309,8 @@ struct Index {
       }
       await this.updateTokenConfig(tokens[i], false);
     }
-    promptAction.showToast({message: `${tokens.length} token(s) updated.`})
+    const message = $r('app.string.toast_multi_token_update');
+    promptAction.showToast({message: `${message}`.replace("LENGTH", tokens.length.toString())})
   }
 
   //准备接入标准化隐私托管

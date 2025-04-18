@@ -89,16 +89,16 @@ export struct FortiConfigDialog {
 
   requestKeyFromForti(): void {
     if (this.conf.FortiToken.length !== 16) {
-      promptAction.showToast({ message: 'ERROR: Wrong Forti Token!' })
+      promptAction.showToast({ message: $r('app.string.toast_wrong_forti_token') })
       return;
     }
     if (this.conf.FortiDevID.length !== 16) {
-      promptAction.showToast({ message: 'ERROR: Wrong Device ID!' })
+      promptAction.showToast({ message: $r('app.string.toast_wrong_device_id') })
       return;
     }
     let raw_token = base32Decode(this.conf.FortiToken)
     if (!(raw_token[0] === 0x21)) {
-      promptAction.showToast({ message: 'ERROR: Wrong User Token!' })
+      promptAction.showToast({ message: $r('app.string.toast_wrong_user_token') })
       return;
     }
     this.btn_wait_from_forti = true;

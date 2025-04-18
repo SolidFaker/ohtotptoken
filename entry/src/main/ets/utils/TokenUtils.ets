@@ -324,11 +324,11 @@ export class TokenIconPacks {
   public static async addAegisIconPack(path: string): Promise<void> {
     const icon_path_json = path + "/pack.json";
     if (!fileIo.accessSync(icon_path_json)) {
-      promptAction.showToast({ message: "not a valid aegis icon pack" });
+      promptAction.showToast({ message: $r('app.string.toast_icon_pack_invalid') });
       return;
     }
     if (TokenIconPacks.aegis_icon_packs.filter(pack => pack.on_device_path === path).length > 0) {
-      promptAction.showToast({ message: "already installed" });
+      promptAction.showToast({ message: $r('app.string.toast_icon_pack_already_installed') });
       return;
     }
     return readFileContent(icon_path_json).then((val) => {
