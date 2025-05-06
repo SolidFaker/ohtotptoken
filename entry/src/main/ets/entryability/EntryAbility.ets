@@ -1,5 +1,5 @@
 import { AbilityConstant, UIAbility, Want, Configuration,ApplicationStateChangeCallback,
-  ConfigurationConstant  } from '@kit.AbilityKit';
+  ConfigurationConstant } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
