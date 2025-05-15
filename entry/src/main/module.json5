@@ -34,6 +34,9 @@
         "name": 'ohos.permission.ACCESS_BIOMETRIC'
       },
       {
+        "name": 'ohos.permission.PROTECT_SCREEN_LOCK_DATA'//开启应用锁屏敏感数据保护功能
+      },
+      {
         "name": "ohos.permission.STORE_PERSISTENT_DATA",
         "usedScene": {
           "abilities": [

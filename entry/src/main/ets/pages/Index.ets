@@ -1,11 +1,11 @@
-import { bundleManager,common } from '@kit.AbilityKit';
+import { bundleManager,common,contextConstant } from '@kit.AbilityKit';
 import { TokenConfig, otpType } from '../utils/TokenConfig';
 import { TOTPConfigDialog } from '../dialogs/OTPConfigDialog';
 import { FortiConfigDialog } from '../dialogs/FortiConfigDialog';
 import { TokenItem } from '../components/TokenItem';
 import { SettingPage } from '../pages/SettingPage'
 import { url, util } from '@kit.ArkTS';
-import { fileIo as fs } from '@kit.CoreFileKit';
+import { fileIo, fileIo as fs } from '@kit.CoreFileKit';
 import { BusinessError, systemDateTime } from '@kit.BasicServicesKit';
 import promptAction from '@ohos.promptAction'
 import { SteamConfigDialog } from '../dialogs/SteamConfigDialog';
@@ -19,13 +19,15 @@ import { PermissionManager } from '../utils/PermissionManager';
 import { DropFilesDialog } from '../dialogs/DropFilesDialog';
 import { uniformTypeDescriptor } from '@kit.ArkData';
 import { EncryptionPassWordDialog } from '../dialogs/EncryptionPassWordDialog';
-import { restoreFromBackup } from '../utils/TokenBackup';
+import { restoreFromBackup,saveBackupToFile,TokenBackup } from '../utils/TokenBackup';
 import { convertToken2URI, ScanBarCode, TokenIconPacks } from '../utils/TokenUtils';
 import { decodeProtobuf } from '../utils/GoogleAuthUtils';
 import { URIConfigDialog } from '../dialogs/URIConfigDialog';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { userAuth } from '@kit.UserAuthenticationKit';
 import { curves } from '@kit.ArkUI';
+// 申请锁屏下应用敏感数据访问权限
+import { screenLockFileManager } from '@kit.AbilityKit';
 
 const TAG = 'PrivacySubscribe';
 
@@ -120,6 +122,25 @@ struct Index {
       tkStore.getTokens().then((tokens) => {
         this.CurrentTokens = tokens;
         this.token_loading = false;
+        //检测备份目录
+        if (this.CurrentTokens.length==0) {//没有任何数据才去检测备份
+          this.appCtx.area = contextConstant.AreaMode.EL5; // 切换area
+          let backfile= this.appCtx.filesDir+ "/backup/allData.bak";
+          let res = fs.accessSync(backfile);
+          if (res) {
+            restoreFromBackup(backfile, true, "AutoBackUp").then((backup) => {
+              this.appCtx.area = contextConstant.AreaMode.EL2; // 切换area
+              this.updateTokenConfigs(backup.configs).then(() => {
+                tkStore.sortTokens();
+              });
+            }).catch(()=>{
+
+            }).finally(()=>{
+              this.appCtx.area = contextConstant.AreaMode.EL2; // 切换area
+            });
+          }
+          this.appCtx.area = contextConstant.AreaMode.EL2; // 切换area
+        }
       });
     });
 
@@ -198,7 +219,6 @@ struct Index {
            this.updateTimestamp();
     }, 1000);
   }
-
   //region 导入
   private password_input_dialog: CustomDialogController | null = new CustomDialogController({
     builder: EncryptionPassWordDialog({
@@ -249,6 +269,46 @@ struct Index {
 
   onPageHide(): void {
     this.appIsShow=false;
+    hilog.info(0, TAG, "onPageHide");
+    if (this.CurrentTokens.length>0) {
+      //todo需要申请锁屏后读取权限 需要实现后台任务备份
+      try {
+        //申请锁屏后访问加密文件的权限
+        let acquireStatus = screenLockFileManager.acquireAccess();
+        if (acquireStatus === screenLockFileManager.AccessStatus.ACCESS_GRANTED) {
+          hilog.info(0x0000, 'testTag', 'acquireAccess successfully.');
+          // 存储敏感信息前，切换到EL5应用级加密
+          let thisContext=this.getUIContext().getHostContext() as common.UIAbilityContext;
+          thisContext.area = contextConstant.AreaMode.EL5; // 切换area
+          let backfile= thisContext.filesDir+ "/backup/allData.bak";
+          let backfilepath=thisContext.filesDir+ "/backup/";
+          if (fs.accessSync(backfilepath) === false) {
+            fs.mkdirSync(backfilepath,true);
+          }
+          //fs.mkdirSync(thisContext.filesDir+ "/backup/");//创建文件夹
+          let bundleInfo = AppStorage.get<bundleManager.BundleInfo>("BundleInfo");
+          let versionCode = bundleInfo?.versionCode;
+          const backup: TokenBackup = new TokenBackup(versionCode ?? 0,this.CurrentTokens);
+          hilog.info(0, TAG, "AutoBackUp");
+          saveBackupToFile(backfile, backup, true, "AutoBackUp").then(() => {
+            hilog.info(0, TAG, "AutoBackUpEnd");
+          }).catch((reason: BusinessError) => {
+            hilog.error(0, TAG, "AutoBackUpError");
+          }).finally(()=>{
+            // 存储敏感信息完成 切换到EL2
+            thisContext.area = contextConstant.AreaMode.EL2; // 切换area
+          });
+          let releaseStatus = screenLockFileManager.releaseAccess();
+          if (releaseStatus === screenLockFileManager.ReleaseStatus.RELEASE_GRANTED) {
+            hilog.info(0x0000, 'testTag', 'releaseAccess successfully.');
+          }
+        }
+      } catch (err) {
+        let message = (err as BusinessError).message;
+        hilog.error(0x0000, 'testTag', 'acquireAccess failed: %{public}s', message);
+      }
+
+    }
   }
 
   onPageShow(): void {

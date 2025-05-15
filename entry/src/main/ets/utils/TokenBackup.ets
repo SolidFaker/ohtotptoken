@@ -1,4 +1,4 @@
-import { readFileContent, writeFileContent } from "./FileUtils";
+import { readFileContent, writeFileContent,writeFileContentCheckHashEqual } from "./FileUtils";
 import { TokenConfig } from "./TokenConfig";
 import { base32Decode, base32Encode, intArrayToString, stringToIntArray } from "./TokenUtils";
 import { decryptFile, encryptFile } from "./CryptoUtils";
@@ -24,7 +24,7 @@ export async function saveBackupToFile(file_uri: string, backup: TokenBackup, do
   const backup_json = JSON.stringify(backup);
   const backup_raw = do_encrypt ? await encryptFile(backup_json, password) : stringToIntArray(backup_json);
   const b32_encoded = base32Encode(backup_raw);
-  writeFileContent(file_uri, b32_encoded);
+  await writeFileContentCheckHashEqual(file_uri, b32_encoded);
 }
 
 export async function restoreFromBackup(file_uri: string, is_encrypt: boolean = false, password: string = ''): Promise<TokenBackup> {
