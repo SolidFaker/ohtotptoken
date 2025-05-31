@@ -71,11 +71,13 @@ export struct TOTPConfigDialog {
     const parameters: Record<string, string> = {};
     const tail_part = otp_url.href.split('?');
     if (tail_part.length > 1) {
-      const query = tail_part[1].toLowerCase();
+      const query = tail_part[1];
       if (query) {
         query.split('&').forEach(part => {
           const kv: string[] = part.split('=');
-          parameters[kv[0]] = kv[1];
+          //保留secret的大小写
+          if(kv[0].toLowerCase()=='secret')parameters[kv[0].toLowerCase()] = kv[1];
+          else parameters[kv[0].toLowerCase()] = kv[1].toLowerCase();
         });
       }
       this.conf.TokenSecret = parameters['secret'];

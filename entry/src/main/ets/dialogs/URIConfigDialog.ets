@@ -49,11 +49,13 @@ export struct URIConfigDialog {
       token.TokenName = labelParts[1];
 
       const parameters: Record<string, string> = {};
-      const query = otp_url.href.split('?')[1].toLowerCase();
+      const query = otp_url.href.split('?')[1];
       if (query) {
         query.split('&').forEach(part => {
           const kv: string[] = part.split('=');
-          parameters[kv[0]] = kv[1];
+          //保留secret的大小写
+          if(kv[0].toLowerCase()=='secret')parameters[kv[0].toLowerCase()] = kv[1];
+          else parameters[kv[0].toLowerCase()] = kv[1].toLowerCase();
         });
       }
       token.TokenSecret = parameters['secret'];
