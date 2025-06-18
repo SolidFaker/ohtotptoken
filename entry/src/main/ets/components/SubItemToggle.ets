@@ -8,6 +8,7 @@ export struct SubItemToggle {
   @Param disable: boolean = false;
   @Param icon: Resource | undefined = undefined;
   @Param description: string  | Resource = '';
+  @Param descriptionColor: ResourceColor = $r('sys.color.ohos_id_color_text_secondary');
 
   build() {
     Column() {
@@ -41,7 +42,7 @@ export struct SubItemToggle {
       if (this.description != '') {
         Text(this.description)
           .fontSize($r('sys.float.ohos_id_text_size_body2'))
-          .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+          .fontColor(this.descriptionColor)
           .fontWeight(FontWeight.Regular)
           .fontFamily('HarmonyHeiTi')
           .lineHeight(19)

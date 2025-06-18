@@ -151,4 +151,25 @@ export class TokenStore {
   public async RestoreByKVCheckAsync(): Promise<number> {
     return await this.kvMgr.DataSyncToEncryptDatabaseCheckNumber(this.token_prefix);
   }
+  /**
+   * 设置主密码
+   *
+   */
+  public async SetMasterKeyAsync(masterKey:string): Promise<string>  {
+    return await this.kvMgr.EncryptionMasterKeyAndCreateRecoverySecretKey(masterKey);
+  }
+  /**
+   * 校验主密码（如果成功自动派生密钥）
+   *
+   */
+  public async CheckMasterKeySync(masterKey:string): Promise<boolean>  {
+    return await this.kvMgr.CheckMasterKey(masterKey);
+  }
+  /**
+   * 尝试使用恢复密钥还原主密码
+   *
+   */
+  public async CheckRecoverySecretKey(recoveryKey:string): Promise<boolean>  {
+    return await this.kvMgr.CheckRecoverySecretKey(recoveryKey);
+  }
 }

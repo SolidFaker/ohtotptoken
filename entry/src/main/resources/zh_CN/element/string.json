@@ -635,6 +635,78 @@
     {
       "name": "token_item_max_width",
       "value": "最大宽度"
+    },
+    {
+      "name": "restore_master_key",
+      "value": "主密码安全增强"
+    },
+    {
+      "name": "restore_master_key_msg",
+      "value": "使用主密码加密数据，提供更高级别的安全保护"
+    },
+    {
+      "name": "restore_master_key_set",
+      "value": "设置主密码"
+    },
+    {
+      "name": "restore_master_key_set_msg",
+      "value": "请设置主密码：\n- 至少8个字符\n- 包含大小写字母、数字和特殊符号\n- 避免连续相同字符\n- 不要使用姓名、电话或生日等个人信息\n\n请注意：系统不存储您的主密码。一旦丢失，将无法进行数据恢复、迁移等操作，请妥善保管。"
+    },
+    {
+      "name": "restore_master_key_recovery_key_msg",
+      "value": "请立即记录恢复密钥：\n✎ 使用纸张等物理介质保存\n✎ 这是丢失主密码后唯一的恢复手段"
+    },
+    {
+      "name": "restore_master_key_recovery_key_err_msg",
+      "value": "恢复密钥错误，数据恢复失败"
+    },
+    {
+      "name": "restore_master_key_no_set_desc",
+      "value": "您没有配置主密钥，点击配置"
+    },
+    {
+      "name": "restore_master_key_reset_desc",
+      "value": "您已经配置了主密钥，点击重新配置"
+    },
+    {
+      "name": "restore_master_key_password_too_short_msg",
+      "value": "密码过短"
+    },
+    {
+      "name": "restore_recovery_key",
+      "value": "恢复密钥"
+    },
+    {
+      "name": "restore_recovery_key_confirm",
+      "value": "确认已经记录您的恢复密钥"
+    },
+    {
+      "name": "restore_recovery_key_export",
+      "value": "导出恢复密钥"
+    },
+    {
+      "name": "restore_master_key_err_msg",
+      "value": "主密码错误，数据恢复失败"
+    },
+    {
+      "name": "restore_use_recovery_key",
+      "value": "忘记主密码？使用恢复密钥"
+    },
+    {
+      "name": "restore_use_master_key",
+      "value": "使用主密码恢复"
+    },
+    {
+      "name": "restore_input_recovery_key",
+      "value": "输入恢复密钥"
+    },
+    {
+      "name": "restore_input_master_key",
+      "value": "输入主密码"
+    },
+    {
+      "name": "restore_import_recovery_key",
+      "value": "导入恢复密钥文件"
     }
   ]
 }

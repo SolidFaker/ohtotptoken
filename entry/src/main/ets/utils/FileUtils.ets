@@ -22,6 +22,26 @@ export async function readFileContent(uri: string): Promise<string> {
     return content;
   });
 }
+export async function readFileContentAndCheckSize(uri: string,MaxSize:number): Promise<string> {
+  let content = '';
+  return await fs.open(uri, fs.OpenMode.READ_ONLY).then((f) => {
+    let stat= fs.statSync(f.fd);
+    if (stat.size>MaxSize) {
+      fs.close(f.fd);
+      return content;
+    }
+    let buffer = new ArrayBuffer(BUFFER_SIZE);
+    let offset = 0;
+    let readOut = 0;
+    do {
+      readOut = fs.readSync(f.fd, buffer, { offset: offset });
+      content += intArrayToString(buffer.slice(0, readOut));
+      offset += BUFFER_SIZE;
+    } while (readOut == BUFFER_SIZE)
+    fs.close(f.fd);
+    return content;
+  });
+}
 
 export async function writeFileContent(uri: string, content: string): Promise<void> {
   //调整为覆盖写入 只写入 并且创建新文件

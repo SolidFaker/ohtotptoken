@@ -77,7 +77,9 @@ export class AppPreference {
     // 是否处于debug模式
     ['app_debug_mode_on', false],
     // 是否使用主密码增强安全
-    ['app_use_kdf', false]
+    ['app_use_master_key', false],
+    // 是否已经配置了朱密码
+    ['app_use_master_key_set', false]
   ]);
 
   private static appearance_default: Map<string, SettingValue> = new Map<string, SettingValue>([

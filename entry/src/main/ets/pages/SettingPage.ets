@@ -13,6 +13,7 @@ import { PermissionManager } from '../utils/PermissionManager';
 import { EncryptionPassWordDialog } from '../dialogs/EncryptionPassWordDialog';
 import { restoreFromBackup, saveBackupToFile, TokenBackup } from '../utils/TokenBackup';
 import { showSaveFilePicker, showSelectFilePicker, writeFileContent } from '../utils/FileUtils';
+import { throttle } from '../utils/UiUtils';
 import { SubItemDivider } from '../components/SubItemDivider';
 import { SubItemSelect } from '../components/SubItemSelect';
 import { window } from '@kit.ArkUI';
@@ -31,7 +32,11 @@ export struct SettingPage {
   @Local RdbSyncEnable: SettingValue = false;
   @Local RdbCloudSyncEnable: SettingValue = false;
   @Local is_loaded: boolean = false;
+  @Local is_master_key_enable: boolean = AppPreference.getPreference('app_use_master_key') as boolean;
+  @Local is_master_key_set: boolean = AppPreference.getPreference('app_use_master_key_set') as boolean;
+
   @Local debug_mode_is_on: boolean = AppPreference.getPreference('app_debug_mode_on') as boolean;
+
 
   @Local token_preference: TokenPreference = AppStorageV2.connect(TokenPreference) as TokenPreference;
 
@@ -59,15 +64,18 @@ export struct SettingPage {
       "E-mail: enbinli@outlook.com\n" +
       "Contributors: @Solidfaker, @eveloki, @lsxuan12138, @TomStilson, @tomygin, @wulongshe\n" +
       "Bundle Name: " + bundleInfo?.name + "\n" +
-      "Version: " + bundleInfo?.versionName;
+      "Version: " + bundleInfo?.versionName + "\n" +
+      "Version Code: " + bundleInfo?.versionCode;
     this.str_opensource_leg =
       "Github: paolostivanin/libcotp\n" +
       "Github: Netthaw/TOTP-MCU\n" +
       "Github: ss23/fortitoken-mobile-registration\n" +
       "Github: iamhyc/Aigis\n" +
       "Github: andOTP/andOTP - Icons";
+    this.appCtx.eventHub.on('onMasterKeyPageBack',()=>{
+      this.is_master_key_set = AppPreference.getPreference('app_use_master_key_set') as boolean;
+    })
   }
-
   //更新数据同步权限
   updateDATASYNCPermissions(isAccess: boolean) {
     if (!isAccess) {
@@ -313,6 +321,30 @@ export struct SettingPage {
           ListItem() {
             SettingItem({ title: $r('app.string.setting_safety') }) {
               SubItemToggle({
+                icon: $r('sys.symbol.staroflife_rectangle'),
+                title: $r('app.string.restore_master_key'),
+                isOn: AppPreference.getPreference('app_use_master_key') as boolean,
+                description: $r('app.string.restore_master_key_msg'),
+                onChange: (IsOn: boolean) => {
+                  this.is_master_key_enable=IsOn;
+                  AppPreference.setPreference('app_use_master_key', IsOn);
+                }
+              })
+              SubItemButton({
+                symbol: $r('sys.symbol.key_shield'),
+                text: $r('app.string.restore_master_key_set'),
+                description:this.is_master_key_set?$r('app.string.restore_master_key_reset_desc'):$r('app.string.restore_master_key_no_set_desc'),
+                descriptionColor:this.is_master_key_set?$r('sys.color.ohos_id_color_text_secondary'):$r('app.color.token_progress_next_color_end')
+              })//条件渲染有第一次不生效的bug（虚假机下） 很奇怪
+                .visibility(this.is_master_key_enable ? Visibility.Visible : Visibility.None)// 使用显隐控制，启动时即使组件处于隐藏状态，也会创建
+                .onClick(throttle((event) => {
+                  //this.is_master_key_set=!this.is_master_key_set;
+                  router.pushUrl({ url: 'pages/MasterKeyPage' });
+                }, 1000))
+
+              SubItemDivider()
+
+              SubItemToggle({
                 icon: $r('sys.symbol.hand_raised_hexagon'),
                 title: $r('app.string.setting_safety_privacy'),
                 isOn: AppPreference.getPreference('app_safety_privacy_enable') as boolean,
@@ -451,9 +483,9 @@ export struct SettingPage {
                 symbol: $r("sys.symbol.paintpalette"),
                 text: $r('app.string.customize_appearance')
               })
-                .onClick(() => {
+                .onClick(throttle((event) => {
                   router.pushUrl({ url: 'pages/AppearancePage' });
-                })
+                }, 1000))
             }
           }
           .padding({ left: 10, right: 10 })
@@ -499,9 +531,9 @@ export struct SettingPage {
                 symbol: $r('sys.symbol.arrow_counterclockwise_clock'),
                 text: $r('app.string.data_rdb_sync_details')
               })
-                .onClick(() => {
+                .onClick(throttle((event) => {
                   router.pushUrl({ url: 'pages/ShowDataSyncDetailsPage' });
-                })
+                }, 1000))
             }
           }
           .padding({ left: 10, right: 10 })
@@ -509,9 +541,9 @@ export struct SettingPage {
           ListItem() {
             SettingItem({ title: $r('app.string.setting_agreement_statement') }) {
               SubItemButton({ symbol: $r("sys.symbol.person_shield"), text: $r('app.string.privacy_statement') })
-                .onClick(() => {
-                  router.pushUrl({ url: 'pages/PrivacyPage' });
-                })
+                .onClick(throttle((event) => {
+                    router.pushUrl({ url: 'pages/PrivacyPage' });
+                }, 1000))
 
               SubItemDivider()
 
@@ -519,9 +551,9 @@ export struct SettingPage {
                 symbol: $r("sys.symbol.doc_plaintext_and_pencil"),
                 text: $r('app.string.user_agreement')
               })
-                .onClick(() => {
+                .onClick(throttle((event) => {
                   router.pushUrl({ url: 'pages/AgreementPage' });
-                })
+                }, 1000))
             }
           }
           .padding({ left: 10, right: 10 })

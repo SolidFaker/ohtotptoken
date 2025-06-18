@@ -635,6 +635,79 @@
     {
       "name": "token_item_max_width",
       "value": "Max Width"
+    },
+    {
+      "name": "restore_master_key",
+      "value": "Master Password Security Enhancement"
+    },
+    {
+      "name": "restore_master_key_msg",
+      "value": "Encrypt your data with a master password for advanced protection"
+    },
+    {
+      "name": "restore_master_key_set",
+      "value": "Set Master Password"
+    },
+    {
+      "name": "restore_master_key_set_msg",
+      "value": "Set your master password with:\n- Minimum 8 characters\n- Uppercase/lowercase letters, numbers, and symbols\n- No consecutive identical characters\n- Avoid personal information (name, phone, birthday)\n\nNote: We do not store your master password. Loss will prevent data restoration or migration. Store it securely."
+    },
+    {
+      "name": "restore_master_key_recovery_key_msg",
+      "value": "Record your recovery key now:\n✎ Preserve on paper or physical medium\n✎ This is your only recovery method if master password is lost"
+    },
+    {
+      "name": "restore_master_key_recovery_key_err_msg",
+      "value": "Invalid recovery key, data restoration failed"
+    },
+    {
+      "name": "restore_master_key_no_set_desc",
+      "value": "You have not set the master key yet. Please click it and configure it"
+    },
+    {
+      "name": "restore_master_key_reset_desc",
+      "value": "You have already configured the master key, click it on reconfigure"
+    },
+    {
+      "name": "restore_master_key_password_too_short_msg",
+      "value": "Password too short"
+    },
+    {
+      "name": "restore_recovery_key",
+      "value": "Recovery key"
+    },
+    {
+      "name": "restore_recovery_key_confirm",
+      "value": "Confirm Record your recovery key"
+    },
+    {
+      "name": "restore_recovery_key_export",
+      "value": "Confirm Export your recovery key"
+    },
+    {
+      "name": "restore_master_key_err_msg",
+      "value": "Invalid Master key, data restoration failed"
+    },
+    {
+      "name": "restore_use_recovery_key",
+      "value": "Forgot master password? Use recovery key"
+    },
+    {
+      "name": "restore_use_master_key",
+      "value": "Restore with master password"
+    },
+    {
+      "name": "restore_input_recovery_key",
+      "value": "Enter recovery key"
+    },
+    {
+      "name": "restore_input_master_key",
+      "value": "Enter master password"
+    },
+    {
+      "name": "restore_import_recovery_key",
+      "value": "Import recovery key file"
     }
+
   ]
 }

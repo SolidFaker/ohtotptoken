@@ -101,7 +101,7 @@ struct Index {
         this.token_loading = false;
         // DEBUG MODE
         tkStore.RestoreByKVCheckAsync().then((n:number)=>{
-          if (this.CurrentTokens.length==0&&n>0) {
+          if (this.CurrentTokens.length==0 && n>0) {
             router.pushUrl({ url: 'pages/RestoreDataPage' });
           }
         }).catch((err:BusinessError)=>{
