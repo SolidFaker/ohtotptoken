@@ -12,6 +12,7 @@ import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { decryptFile, encryptFile,encryptStringData,decryptStringData,encryptUint8ArrayData,decryptUint8ArrayData } from "./CryptoUtils";
 import { base32Decode, base32Encode,stringToArray } from './TokenUtils';
 import { faceDetector } from '@kit.CoreVisionKit';
+import { readFileContent } from './FileUtils';
 
 export class KvManager {
   //单版本分布式键值数据库
@@ -326,6 +327,18 @@ export class KvManager {
                 hilog.error(err.code,"DataSyncToNoEncryptDatabase",`Failed to put Batch.code is ${err.code},message is ${err.message}`);
                 return;
               }
+              else
+              {
+                this._kvStoreNoE?.getEntries('^').then((data)=>{
+                  let entriesJson=JSON.stringify(data);
+                  let ctx = AppStorage.get<common.UIAbilityContext>('appContext') as common.UIAbilityContext;
+                  let filePath = ctx.filesDir + '/back.json';
+                  let fileStream = fs.createStreamSync(filePath, "w+");
+                  fileStream.writeSync(entriesJson);
+                  fileStream.close();
+                });
+
+              }
             });
             return entries.length;
           }
@@ -344,7 +357,7 @@ export class KvManager {
    * 非加密数据库将数据同步到加密数据库（还原场景专用）.
    *
    */
-  async DataSyncToEncryptDatabase(): Promise<number> {
+  async DataSyncToEncryptDatabase(entries:distributedKVStore.Entry[]|null|undefined): Promise<number> {
     if (this._kvStore && this._kvStoreNoE) {
 
       let secret_key=await this.queryEncryptTokenDataKey();
@@ -352,7 +365,15 @@ export class KvManager {
         if (secret_key!="") {
           let secret_keyBlob=base32Decode(secret_key);
           let symKeyBlob: cryptoFramework.DataBlob = { data: secret_keyBlob};
-          let EncryptData_entries = await this._kvStoreNoE.getEntries('^');
+          let EncryptData_entries : distributedKVStore.Entry[] = [];
+          if (entries==null || entries==undefined || entries.length==0)
+          {
+            EncryptData_entries = await this._kvStoreNoE.getEntries('^');
+          }
+          else
+          {
+            EncryptData_entries=entries;
+          }
           if (EncryptData_entries && EncryptData_entries.length>0) {
             let entries: distributedKVStore.Entry[] = [];
             for (let i = 0; i < EncryptData_entries.length; i++) {
@@ -362,19 +383,21 @@ export class KvManager {
                 || EncryptData_entries[i].key==this._tokenEncryptionMasterRecoverySecretKeyName) {
                 continue;
               }
-              let data=EncryptData_entries[i].value.value as Uint8Array;
-              let dataitem=await decryptStringData(data,symKeyBlob);
-              if (dataitem==null) {
-                continue;//有一个解密失败就放弃当前解密
-              }
-              let entry: distributedKVStore.Entry = {
-                key: EncryptData_entries[i].key,
-                value: {
-                  type: distributedKVStore.ValueType.STRING,
-                  value: dataitem
+              if (EncryptData_entries[i].value.value instanceof Uint8Array) {
+                let data=EncryptData_entries[i].value.value as Uint8Array;
+                let dataitem=await decryptStringData(data,symKeyBlob);
+                if (dataitem==null) {
+                  continue;//有一个解密失败就放弃当前解密
                 }
+                let entry: distributedKVStore.Entry = {
+                  key: EncryptData_entries[i].key,
+                  value: {
+                    type: distributedKVStore.ValueType.STRING,
+                    value: dataitem
+                  }
+                }
+                entries.push(entry);
               }
-              entries.push(entry);
             }
             if (entries.length>0)
             {
@@ -414,6 +437,15 @@ export class KvManager {
     const query = new distributedKVStore.Query();
     query.prefixKey(token_prefix);
     let EncryptData_entries_count =await this._kvStoreNoE?.getResultSize(query);
+    if (EncryptData_entries_count==undefined || EncryptData_entries_count==0) {
+      let ctx = AppStorage.get<common.UIAbilityContext>('appContext') as common.UIAbilityContext;
+      let filePath = ctx.filesDir + '/back.json';
+      if (fs.accessSync(filePath)) {
+        let  val= await readFileContent(filePath);
+        const tmp = JSON.parse(val) as distributedKVStore.Entry[];
+        return tmp.length;
+      }
+    }
     return EncryptData_entries_count??0;
   }
   /**
@@ -657,5 +689,35 @@ export class KvManager {
       }
 
     }
+  }
+  /**
+   * 检查是否有还原数据可用 返回可用条数（还原场景专用）.
+   *
+   */
+  async DataRecoveryByLocalFile(): Promise<number>{
+    let ctx = AppStorage.get<common.UIAbilityContext>('appContext') as common.UIAbilityContext;
+    let filePath = ctx.filesDir + '/back.json';
+    if (fs.accessSync(filePath)) {
+      let  val= await readFileContent(filePath);
+      const tmp = JSON.parse(val) as distributedKVStore.Entry[];
+      return await this.DataSyncToEncryptDatabase(tmp);
+    }
+    else
+    {
+      return await this.DataSyncToEncryptDatabase(null);
+    }
+    // const query = new distributedKVStore.Query();
+    // query.prefixKey('^');
+    // let EncryptData_entries_count =await this._kvStoreNoE?.getResultSize(query);
+    // if (EncryptData_entries_count!=undefined ) {
+    //   if (EncryptData_entries_count == 0) {
+    //
+    //   }
+    //   else
+    //   {
+    //     return await this.DataSyncToEncryptDatabase();
+    //   }
+    // }
+    // return 0;
   }
 }

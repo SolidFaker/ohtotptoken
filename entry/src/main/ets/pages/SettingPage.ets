@@ -13,7 +13,7 @@ import { PermissionManager } from '../utils/PermissionManager';
 import { EncryptionPassWordDialog } from '../dialogs/EncryptionPassWordDialog';
 import { restoreFromBackup, saveBackupToFile, TokenBackup } from '../utils/TokenBackup';
 import { showSaveFilePicker, showSelectFilePicker, writeFileContent } from '../utils/FileUtils';
-import { throttle } from '../utils/UiUtils';
+import { throttle,startBrowsableAbility } from '../utils/UiUtils';
 import { SubItemDivider } from '../components/SubItemDivider';
 import { SubItemSelect } from '../components/SubItemSelect';
 import { window } from '@kit.ArkUI';
@@ -557,6 +557,15 @@ export struct SettingPage {
                 .onClick(throttle((event) => {
                   router.pushUrl({ url: 'pages/AgreementPage' });
                 }, 1000))
+
+              SubItemDivider()
+
+              SubItemButton({ symbol: $r("sys.symbol.questionmark_circle"), text: $r('app.string.app_issue_feedback') })
+                .onClick(throttle((event) => {
+                  const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+                  startBrowsableAbility(context,'https://github.com/SolidFaker/ohtotptoken/issues');
+                }, 1000))
+
             }
           }
           .padding({ left: 10, right: 10 })
@@ -600,9 +609,9 @@ export struct SettingPage {
           ListItemGroup() {
             ListItem() {
               Row() {
-                Hyperlink('https://github.com/SolidFaker/ohtotptoken/issues', $r('app.string.app_issue_feedback'))
-                  .height(10)
-                  .padding({ left: 10 })
+                //Hyperlink('https://github.com/SolidFaker/ohtotptoken/issues', $r('app.string.app_issue_feedback'))
+                //  .height(10)
+                //  .padding({ left: 10 })
                 Hyperlink('https://beian.miit.gov.cn/', '粤ICP备2020075515号-2A')
                   .height(10)
                   .padding({ left: 10 })

@@ -81,7 +81,7 @@ export class AppPreference {
     ['app_debug_mode_on', false],
     // 是否使用主密码增强安全
     ['app_use_master_key', false],
-    // 是否已经配置了朱密码
+    // 是否已经配置了主密码
     ['app_use_master_key_set', false]
   ]);
 

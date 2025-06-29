@@ -7,6 +7,7 @@ import { AppStorageV2, promptAction } from '@kit.ArkUI';
 import { SubItemDivider } from './SubItemDivider';
 import { AppPreference } from '../utils/AppPreference';
 import { AppWindowInfo } from '../entryability/EntryAbility';
+import { throttle,startBrowsableAbility } from '../utils/UiUtils';
 
 @Preview
 @ComponentV2
@@ -79,8 +80,28 @@ export struct SubItemIconManager {
                 .fontWeight(FontWeight.Regular)
                 .textAlign(TextAlign.Start)
               Column({ space: 10 }) {
-                Hyperlink('https://github.com/aegis-icons/aegis-icons/releases/latest/download/aegis-icons.zip', 'aegis-icons')
-                Hyperlink('https://github.com/Delta-Icons/aegis/releases/latest/download/delta-aegis-icons.zip', 'delta-icons')
+                Button('aegis-icons', { buttonStyle: ButtonStyleMode.NORMAL, controlSize: ControlSize.SMALL })
+                  .borderRadius($r('sys.float.corner_radius_level4') )
+                  .type(ButtonType.Capsule)
+                  .margin({ left: $r('sys.float.padding_level8') })
+                  .width(100)
+                  .fontColor($r('sys.color.interactive_active'))
+                  .onClick(throttle((event) => {
+                    const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+                    startBrowsableAbility(context,'https://github.com/aegis-icons/aegis-icons/releases/latest/download/aegis-icons.zip');
+                  }, 1000))
+                Button('delta-icons', { buttonStyle: ButtonStyleMode.NORMAL, controlSize: ControlSize.SMALL })
+                  .borderRadius($r('sys.float.corner_radius_level4') )
+                  .type(ButtonType.Capsule)
+                  .margin({ left: $r('sys.float.padding_level8') })
+                  .width(100)
+                  .fontColor($r('sys.color.interactive_active'))
+                  .onClick(throttle((event) => {
+                    const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+                    startBrowsableAbility(context,'https://github.com/Delta-Icons/aegis/releases/latest/download/delta-aegis-icons.zip');
+                  }, 1000))
+                //Hyperlink('https://github.com/aegis-icons/aegis-icons/releases/latest/download/aegis-icons.zip', 'aegis-icons').color($r('sys.color.ohos_id_color_text_primary'))
+                //Hyperlink('https://github.com/Delta-Icons/aegis/releases/latest/download/delta-aegis-icons.zip', 'delta-icons').color($r('sys.color.ohos_id_color_text_primary'))
               }
               .alignItems(HorizontalAlign.Center)
               .layoutWeight(1)

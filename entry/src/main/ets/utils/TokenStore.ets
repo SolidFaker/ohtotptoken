@@ -142,7 +142,8 @@ export class TokenStore {
    *
    */
   public async RestoreByKVAsync(): Promise<number> {
-    return await this.kvMgr.DataSyncToEncryptDatabase();
+    //return await this.kvMgr.DataSyncToEncryptDatabase();
+    return await this.kvMgr.DataRecoveryByLocalFile();
   }
   /**
    * 检查是否有还原数据可用 返回可用条数（还原场景专用）.

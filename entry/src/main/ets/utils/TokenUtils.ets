@@ -1,5 +1,5 @@
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
-import { buffer, HashMap, HashSet } from '@kit.ArkTS';
+import { buffer, HashMap, HashSet, util } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { otpType, TokenConfig } from './TokenConfig';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
