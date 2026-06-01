@@ -222,7 +222,7 @@
     },
     {
       "name": "data_rdb_sync_des",
-      "value": "The distributed application data sync allows the data of an application to be synced with other devices that are connected to form a Virtual Device."
+      "value": "Data will be synced to other devices logged into your Huawei account in the same network. Only token data is synced; icon packs and preferences are not included."
     },
     {
       "name": "data_rdb_cloud_sync",
@@ -230,7 +230,7 @@
     },
     {
       "name": "data_rdb_cloud_sync_des",
-      "value": "Backup app data to Huawei Cloud. Data will be backed up to Huawei Cloud Drive."
+      "value": "Backup token and icon pack data to Huawei Cloud. Data will be stored securely in Huawei Cloud."
     },
     {
       "name": "data_rdb_sync_details",
@@ -398,7 +398,7 @@
     },
     {
       "name": "data_kv_sync_manual_des",
-      "value": "Sync all tokens to other devices"
+      "value": "Sync all tokens to other devices (icon packs excluded)"
     },
     {
       "name": "cloud_backup_manual",
@@ -1263,6 +1263,58 @@
     {
       "name": "importer_uri_desc",
       "value": "粘贴 otpauth:// 链接导入令牌"
+    },
+    {
+      "name": "icon_pack_cloud_backup_hint",
+      "value": "Icon pack settings are automatically synced to all your devices via Huawei Cloud Backup. See \"Backup & Migration > Huawei Cloud Backup\" for details."
+    },
+    {
+      "name": "cloud_sync_icon_pack_title",
+      "value": "Icon Pack Backup"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status",
+      "value": "Backup Status"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status_done_suffix",
+      "value": "packs backed up,"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status_none",
+      "value": "Not backed up"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status_empty",
+      "value": "No icon packs"
+    },
+    {
+      "name": "cloud_sync_icon_pack_last_time",
+      "value": "Last Backup"
+    },
+    {
+      "name": "cloud_sync_icon_pack_source_device",
+      "value": "Source Device"
+    },
+    {
+      "name": "cloud_sync_icon_pack_hint",
+      "value": "Icon pack files and preferences are backed up to Huawei Cloud along with your tokens and automatically restored to all devices."
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_backing_up",
+      "value": "Backing up..."
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_restoring",
+      "value": "Restoring..."
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_clearing",
+      "value": "Clearing..."
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_checking",
+      "value": "Checking..."
     }
   ]
 }

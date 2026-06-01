@@ -5,7 +5,7 @@ import { AegisIconPack, TokenIconPacks } from '../utils/TokenUtils';
 import { BusinessError, zlib } from '@kit.BasicServicesKit';
 import { AppStorageV2 } from '@kit.ArkUI';
 import { SubItemDivider } from './SubItemDivider';
-import { AppPreference, BUILTIN_DEFAULT_PACK_ID } from '../utils/AppPreference';
+import { AppPreference, BUILTIN_DEFAULT_PACK_ID, PREF_KEYS } from '../utils/AppPreference';
 import { AppWindowInfo } from '../entryability/EntryAbility';
 import { throttle, startBrowsableAbility } from '../utils/UiUtils';
 import { showSnackBar, SnackBarNotifyType } from '../utils/HdsSnackBarUtils';
@@ -451,6 +451,23 @@ export struct SubItemIconManager {
           }
           .width('100%')
           .margin({ top: 10 })
+
+          if (AppPreference.getPreference(PREF_KEYS.APPEARANCE_HUAWEI_CLOUD_SYNC_ENABLE) as boolean) {
+            Row() {
+              SymbolGlyph($r('sys.symbol.info_circle'))
+                .fontSize(16)
+                .fontColor([$r('sys.color.ohos_id_color_text_secondary')])
+                .margin({ right: 6 })
+              Text($r('app.string.icon_pack_cloud_backup_hint'))
+                .fontSize($r('sys.float.ohos_id_text_size_caption'))
+                .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+                .fontWeight(FontWeight.Regular)
+                .layoutWeight(1)
+            }
+            .width('100%')
+            .margin({ top: 8 })
+            .padding({ left: 4, right: 4 })
+          }
         }
         .width('100%')
       }

@@ -69,6 +69,7 @@ import lazy { SteamConfigDialog } from '../dialogs/SteamConfigDialog';
 import { CommonConstants } from '../utils/CommonConstants';
 // [冷启动优化] 华为账号管理器仅在 deferredInit 中初始化
 import lazy { HuaweiAccountManager, HuaweiUserInfo, HuaweiAccountLoginError } from '../utils/HuaweiAccountManager';
+import lazy { IconPackCloudBackup } from '../utils/IconPackCloudBackup';
 import { DlpAntiPeepManager } from '../utils/DlpAntiPeepManager';
 
 const TAG = 'PrivacySubscribe';
@@ -329,6 +330,9 @@ struct Index {
       }
     });
 
+    // 图标包云端自动恢复：检查云端是否有更新的备份，如有则静默恢复并合并
+    this.checkAndRestoreIconPacks();
+
     // [冷启动优化] FortiToken 证书文件从同步读取改为异步读取，避免阻塞主线程
     let cer_path = this.appCtx.filesDir + "/fmt.ks"
     fs.access(cer_path, fs.AccessModeType.EXIST).then((exist) => {
@@ -419,6 +423,14 @@ struct Index {
       TokenIconPacks.enabled_packs = AppPreference.loadEnabledPacks();
     }
     this.appCtx.eventHub.emit(EVENT_NAMES.ICON_PACK_CHANGED);
+  }
+
+  /**
+   * 图标包自动恢复入口，委托给 IconPackCloudBackup.checkAndAutoRestore()
+   * 内部通过状态机保证不会与备份/清理操作冲突
+   */
+  private async checkAndRestoreIconPacks(): Promise<void> {
+    await IconPackCloudBackup.getInstance().checkAndAutoRestore();
   }
 
   /**

@@ -160,6 +160,8 @@ export enum PREF_KEYS {
   MASTER_KEY_DEPRECATION_ACKNOWLEDGED = 'app_master_key_deprecation_acknowledged',
   /** ASSET Secret 迁移已完成（持久化标记，避免每次加载重复迁移） */
   ASSET_MIGRATION_DONE = 'app_asset_migration_done',
+  /** 图标包云备份最后同步时间 */
+  ICON_PACK_CLOUD_SYNC_TIME = 'app_icon_pack_cloud_sync_time',
 }
 
 /** 主密码旧偏好键名（已废弃，仅用于兼容性检测与清理） */

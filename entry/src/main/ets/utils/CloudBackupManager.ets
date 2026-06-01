@@ -15,7 +15,7 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppPreference, PREF_KEYS } from './AppPreference';
-import { CloudBackupCrypto, CloudBackupCryptoMode, CloudBackupRecord, CloudBackupTokenError } from './CloudBackupCrypto';
+import { CloudBackupCrypto, CloudBackupRecord, CloudBackupTokenError } from './CloudBackupCrypto';
 import { TokenStore } from './TokenStore';
 import { TokenConfig } from './TokenConfig';
 import { fileIo as fs, cloudSync, fileUri } from '@kit.CoreFileKit';
@@ -24,12 +24,24 @@ import { buffer } from '@kit.ArkTS';
 import { DeviceInfoHelper } from './DeviceInfoHelper';
 import { HuaweiAccountManager } from './HuaweiAccountManager';
 import { SyncTimeHelper } from './SyncTimeHelper';
+import { TokenIconPacks } from './TokenUtils';
+import { IconPackCloudBackup, PackMetaEntry } from './IconPackCloudBackup';
 
 const TAG = 'CloudBackupManager';
 const DOMAIN = 0xFF00;
 const MAX_BACKUP_COUNT = 5;
 const BACKUP_FILE_PREFIX = 'otp_backup_';
 const BACKUP_FILE_EXT = '.enc';
+
+/**
+ * 云备份载荷：将 TokenConfig[] 包装为结构化格式，附带图标包启用列表和元数据。
+ * 旧格式（直接序列化为 TokenConfig[]）通过 restoreFromBackupRecord 中的 Array.isArray 检测兼容。
+ */
+class CloudBackupPayload {
+  tokens: TokenConfig[] = [];
+  enabledPacks: string[] = [];
+  packMeta: PackMetaEntry[] = [];
+}
 
 /**
  * 云端备份管理器
@@ -137,8 +149,23 @@ export class CloudBackupManager {
 
     hilog.info(DOMAIN, TAG, `backupToCloud: starting backup, mode=${mode}`);
 
+    // 构造 CloudBackupPayload：包含令牌、图标包启用列表、图标包元数据
     const tokens = await TokenStore.getInstance().getTokens();
-    const plaintext = JSON.stringify(tokens);
+    const enabledPacks = TokenIconPacks.enabled_packs;
+    const payload = new CloudBackupPayload();
+    payload.tokens = tokens;
+    payload.enabledPacks = enabledPacks;
+    const metaList: PackMetaEntry[] = [];
+    for (const p of TokenIconPacks.aegis_icon_packs) {
+      const m = new PackMetaEntry();
+      m.uuid = p.uuid;
+      m.name = p.name;
+      m.version = p.version;
+      m.iconCount = p.icons.length;
+      metaList.push(m);
+    }
+    payload.packMeta = metaList;
+    const plaintext = JSON.stringify(payload);
     const now = Date.now();
 
     hilog.info(DOMAIN, TAG, `backupToCloud: token count=${tokens.length}`);
@@ -177,6 +204,14 @@ export class CloudBackupManager {
     AppPreference.setPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME, `${now}`);
 
     hilog.info(DOMAIN, TAG, 'backupToCloud: completed successfully');
+
+    // 图标包文件备份：fire-and-forget，不阻塞 token 备份成功返回
+    IconPackCloudBackup.getInstance().backupIconPacks().then((iconResult) => {
+      hilog.info(DOMAIN, TAG, `backupToCloud: icon pack backup result=${iconResult}`);
+    }).catch((err: Error) => {
+      hilog.error(DOMAIN, TAG, `backupToCloud: icon pack backup failed: ${err.message}`);
+    });
+
     return true;
   }
 
@@ -232,6 +267,8 @@ export class CloudBackupManager {
         await this.deleteBackupFile(record.id);
       }
       AppPreference.setPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME, '0');
+      // 同步清除图标包云端备份（fire-and-forget）
+      IconPackCloudBackup.getInstance().clearCloudBackup();
       hilog.info(DOMAIN, TAG, 'clearCloudStorage: completed');
       return true;
     } catch (e) {
@@ -263,6 +300,8 @@ export class CloudBackupManager {
         await this.deleteBackupFile(record.id);
       }
       AppPreference.setPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME, '0');
+      // 同步清除图标包云端备份（fire-and-forget）
+      IconPackCloudBackup.getInstance().clearCloudBackup();
       hilog.info(DOMAIN, TAG, `clearDeviceCloudStorage: completed, deleted ${deviceRecords.length}`);
       return true;
     } catch (e) {
@@ -300,6 +339,10 @@ export class CloudBackupManager {
       );
       for (const record of staleRecords) {
         await this.deleteBackupFile(record.id);
+      }
+      if (staleRecords.length > 0) {
+        // 仅在有实际删除时才清除图标包备份（避免不必要的云操作）
+        IconPackCloudBackup.getInstance().clearCloudBackup();
       }
       hilog.info(DOMAIN, TAG, `clearDeviceNameCloudStorage: completed, deleted ${staleRecords.length}`);
       return true;
@@ -383,7 +426,25 @@ export class CloudBackupManager {
       const decrypted = await this.crypto.decrypt(tokenContent, mode, encryptKey);
       hilog.info(DOMAIN, TAG, `restoreFromBackupRecord: decrypted size=${decrypted.length}`);
 
-      const tokens: TokenConfig[] = JSON.parse(decrypted) as TokenConfig[];
+      // 兼容新旧格式：新格式为 CloudBackupPayload（含 tokens 数组），旧格式为 TokenConfig[] 数组
+      let tokens: TokenConfig[] = [];
+      let enabledPacks: string[] = [];
+      const payload = JSON.parse(decrypted) as CloudBackupPayload;
+      if (payload.tokens !== undefined && payload.tokens !== null && payload.tokens.length > 0) {
+        tokens = payload.tokens;
+        if (payload.enabledPacks !== undefined && payload.enabledPacks !== null && payload.enabledPacks.length > 0) {
+          enabledPacks = payload.enabledPacks;
+        }
+      } else {
+        const oldTokens = JSON.parse(decrypted) as TokenConfig[];
+        tokens = oldTokens;
+      }
+
+      if (enabledPacks.length > 0) {
+        AppPreference.saveEnabledPacks(enabledPacks);
+        hilog.info(DOMAIN, TAG, `restoreFromBackupRecord: restored enabledPacks`);
+      }
+
       hilog.info(DOMAIN, TAG, `restoreFromBackupRecord: token count=${tokens.length}`);
 
       for (const token of tokens) {

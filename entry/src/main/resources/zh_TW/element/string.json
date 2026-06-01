@@ -226,7 +226,7 @@
     },
     {
       "name": "data_rdb_sync_des",
-      "value": "資料將會同步到一個組網環境中您華為帳號登入的其他裝置。"
+      "value": "資料將會同步到一個組網環境中您華為帳號登入的其他裝置。僅同步令牌資料，不同步圖示包和偏好設定。"
     },
     {
       "name": "data_rdb_cloud_sync",
@@ -234,7 +234,7 @@
     },
     {
       "name": "data_rdb_cloud_sync_des",
-      "value": "將應用資料備份至華為雲端，資料將安全存儲在華為雲端。"
+      "value": "將令牌和圖示包資料備份至華為雲端，資料將安全存儲在華為雲端。"
     },
     {
       "name": "data_rdb_sync_details",
@@ -402,7 +402,7 @@
     },
     {
       "name": "data_kv_sync_manual_des",
-      "value": "同步當前所有令牌到其他裝置"
+      "value": "同步當前所有令牌到其他裝置（不含圖示包）"
     },
     {
       "name": "cloud_backup_manual",
@@ -1263,6 +1263,58 @@
     {
       "name": "importer_uri_desc",
       "value": "貼上 otpauth:// 鏈接匯入令牌"
+    },
+    {
+      "name": "icon_pack_cloud_backup_hint",
+      "value": "圖示包設定隨華為雲備份自動同步至您的所有裝置。詳見「備份與遷移 > 華為雲備份」。"
+    },
+    {
+      "name": "cloud_sync_icon_pack_title",
+      "value": "圖示包備份"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status",
+      "value": "備份狀態"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status_done_suffix",
+      "value": "個圖示包已備份，"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status_none",
+      "value": "未備份"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status_empty",
+      "value": "無圖示包"
+    },
+    {
+      "name": "cloud_sync_icon_pack_last_time",
+      "value": "上次備份"
+    },
+    {
+      "name": "cloud_sync_icon_pack_source_device",
+      "value": "來源設備"
+    },
+    {
+      "name": "cloud_sync_icon_pack_hint",
+      "value": "圖示包檔案和啟用設定隨令牌一起備份到華為雲，恢復時自動還原至所有裝置。"
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_backing_up",
+      "value": "正在備份..."
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_restoring",
+      "value": "正在恢復..."
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_clearing",
+      "value": "正在清理..."
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_checking",
+      "value": "正在檢查..."
     }
   ]
 }

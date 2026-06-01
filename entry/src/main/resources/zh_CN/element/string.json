@@ -226,7 +226,7 @@
     },
     {
       "name": "data_rdb_sync_des",
-      "value": "数据将会同步到一个组网环境中您华为账户登录的其他设备。"
+      "value": "数据将会同步到一个组网环境中您华为账户登录的其他设备。仅同步令牌数据，不同步图标包和偏好设置。"
     },
     {
       "name": "data_rdb_cloud_sync",
@@ -234,7 +234,7 @@
     },
     {
       "name": "data_rdb_cloud_sync_des",
-      "value": "将应用数据备份至华为云，数据将安全存储在华为云端。"
+      "value": "将令牌和图标包数据备份至华为云，数据将安全存储在华为云端。"
     },
     {
       "name": "data_rdb_sync_details",
@@ -402,7 +402,7 @@
     },
     {
       "name": "data_kv_sync_manual_des",
-      "value": "同步当前所有令牌到其他设备"
+      "value": "同步当前所有令牌到其他设备（不含图标包）"
     },
     {
       "name": "cloud_backup_manual",
@@ -1263,6 +1263,58 @@
     {
       "name": "importer_uri_desc",
       "value": "粘贴 otpauth:// 链接导入令牌"
+    },
+    {
+      "name": "icon_pack_cloud_backup_hint",
+      "value": "图标包设置随华为云备份自动同步至您的所有设备。详见「备份与迁移 > 华为云备份」。"
+    },
+    {
+      "name": "cloud_sync_icon_pack_title",
+      "value": "图标包备份"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status",
+      "value": "备份状态"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status_done_suffix",
+      "value": "个图标包已备份，"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status_none",
+      "value": "未备份"
+    },
+    {
+      "name": "cloud_sync_icon_pack_status_empty",
+      "value": "无图标包"
+    },
+    {
+      "name": "cloud_sync_icon_pack_last_time",
+      "value": "上次备份"
+    },
+    {
+      "name": "cloud_sync_icon_pack_source_device",
+      "value": "来源设备"
+    },
+    {
+      "name": "cloud_sync_icon_pack_hint",
+      "value": "图标包文件和启用设置随令牌一起备份到华为云，恢复时自动还原至所有设备。"
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_backing_up",
+      "value": "正在备份..."
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_restoring",
+      "value": "正在恢复..."
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_clearing",
+      "value": "正在清理..."
+    },
+    {
+      "name": "cloud_sync_icon_pack_state_checking",
+      "value": "正在检查..."
     }
   ]
 }

@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 import { common, Want } from '@kit.AbilityKit';
-import { AppStorageV2, PromptAction, promptAction,LengthMetrics } from '@kit.ArkUI';
+import { AppStorageV2, promptAction, LengthMetrics } from '@kit.ArkUI';
 import { SettingItem } from '../components/SettingItem';
 import { AppPreference, SettingValue, PREF_KEYS, ROUTE_NAMES } from '../utils/AppPreference';
 import { SubItemButton } from '../components/SubItemButton';
@@ -30,6 +30,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { taskpool } from '@kit.ArkTS';
 import { checkCloudBackupRecords } from '../utils/CloudSyncTask';
 import { SyncTimeHelper } from '../utils/SyncTimeHelper';
+import { IconPackCloudBackup, IconPackSyncState } from '../utils/IconPackCloudBackup';
 
 const TAG = 'ShowCloudSyncDetailsPage';
 const DOMAIN = 0xFF00;
@@ -53,6 +54,12 @@ export struct ShowCloudSyncDetailsPage {
   @Local syncState: number = -1;
   @Local syncError: number = 0;
   @Local loadingText: ResourceStr = '';
+  @Local iconPackBackupExists: boolean = false;
+  @Local iconPackBackupCount: number = 0;
+  @Local iconPackBackupSize: number = 0;
+  @Local iconPackBackupTime: string = '';
+  @Local iconPackSyncState: number = IconPackSyncState.IDLE;
+  @Local iconPackSourceDevice: string = '';
   @Local window: AppWindowInfo = AppStorageV2.connect(AppWindowInfo) as AppWindowInfo;
   @Local appCtx: common.UIAbilityContext = AppStorage.get('appContext') as common.UIAbilityContext;
   private scroller: Scroller = new Scroller();
@@ -62,6 +69,7 @@ export struct ShowCloudSyncDetailsPage {
   private lastInitialSyncTime: number = 0;
   private readonly SYNC_COOLDOWN_MS: number = 60000;
   private readonly INITIAL_SYNC_COOLDOWN_MS: number = 600000;
+  private iconPackStatePollTimer: number = -1;
   private syncProgressCallback = (pg: cloudSync.SyncProgress) => {
     this.syncState = pg.state as number;
     this.syncError = pg.error as number;
@@ -86,6 +94,7 @@ export struct ShowCloudSyncDetailsPage {
       if (this.cloudSyncEnabled) {
         this.triggerInitialSyncAsync();
       }
+      this.loadIconPackBackupStatus();
     }
     finally {
       this.Is_loaded=false;
@@ -101,11 +110,66 @@ export struct ShowCloudSyncDetailsPage {
       let e = err as BusinessError;
       hilog.error(DOMAIN, TAG, `FileSync off progress failed: ${e.code} ${e.message}`);
     }
+    if (this.iconPackStatePollTimer >= 0) {
+      clearInterval(this.iconPackStatePollTimer);
+      this.iconPackStatePollTimer = -1;
+    }
   }
   /** 同步华为账号管理器的登录态到组件 @Local 变量，用于 UI 条件渲染 */
   private syncHuaweiAccountState(): void {
     const accountMgr = HuaweiAccountManager.getInstance();
     this.isHuaweiLoggedIn = accountMgr.userLogin;
+  }
+
+  private async loadIconPackBackupStatus(): Promise<void> {
+    const status = await IconPackCloudBackup.getInstance().getCloudBackupStatus();
+    this.iconPackBackupExists = status.exists;
+    this.iconPackBackupCount = status.packCount;
+    this.iconPackBackupSize = status.size;
+    this.iconPackBackupTime = status.lastTime;
+    this.iconPackSourceDevice = status.sourceDeviceName;
+    this.iconPackSyncState = IconPackCloudBackup.getInstance().getState();
+
+    // 启动轮询：每 2 秒检查状态机，非 IDLE 时刷新 UI
+    if (this.iconPackStatePollTimer < 0) {
+      this.iconPackStatePollTimer = setInterval(() => {
+        const newState = IconPackCloudBackup.getInstance().getState();
+        if (newState !== this.iconPackSyncState) {
+          this.iconPackSyncState = newState;
+          // 状态回到 IDLE 时刷新备份信息（操作完成）
+          if (newState === IconPackSyncState.IDLE) {
+            this.loadIconPackBackupStatus();
+          }
+        }
+      }, 2000) as number;
+    }
+  }
+
+  /** 将状态机枚举值映射为可读文本 */
+  private getIconPackSyncStateText(): ResourceStr {
+    switch (this.iconPackSyncState) {
+      case IconPackSyncState.BACKING_UP:
+        return $r('app.string.cloud_sync_icon_pack_state_backing_up');
+      case IconPackSyncState.RESTORING:
+        return $r('app.string.cloud_sync_icon_pack_state_restoring');
+      case IconPackSyncState.CLEARING:
+        return $r('app.string.cloud_sync_icon_pack_state_clearing');
+      case IconPackSyncState.CHECKING:
+        return $r('app.string.cloud_sync_icon_pack_state_checking');
+      default:
+        return '';
+    }
+  }
+
+  private isIconPackBusy(): boolean {
+    return this.iconPackSyncState !== IconPackSyncState.IDLE;
+  }
+
+  private formatFileSize(bytes: number): string {
+    if (bytes <= 0) return '0B';
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
   }
 
   build() {
@@ -255,6 +319,87 @@ export struct ShowCloudSyncDetailsPage {
                 }
                 .padding({ left: $r('sys.float.padding_level8'), right: $r('sys.float.padding_level8') })
 
+                ListItem() {
+                  SettingItem({ title: $r('app.string.cloud_sync_icon_pack_title') }) {
+                    Row() {
+                      Text($r('app.string.cloud_sync_icon_pack_status'))
+                        .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                        .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+                        .fontWeight(FontWeight.Regular)
+                        .layoutWeight(1)
+                      if (this.isIconPackBusy()) {
+                        LoadingProgress()
+                          .width(16)
+                          .height(16)
+                          .margin({ right: 6 })
+                        Text(this.getIconPackSyncStateText())
+                          .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                          .fontColor($r('sys.color.ohos_id_color_emphasize'))
+                          .fontWeight(FontWeight.Medium)
+                      } else {
+                        Text(this.getIconPackBackupStatusText())
+                          .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                          .fontColor(this.iconPackBackupExists ?
+                            $r('sys.color.ohos_id_color_text_primary') :
+                            $r('sys.color.ohos_id_color_text_secondary'))
+                          .fontWeight(FontWeight.Medium)
+                      }
+                    }
+                    .width('100%')
+                    .padding($r('sys.float.padding_level8'))
+
+                    SubItemDivider()
+
+                    Row() {
+                      Text($r('app.string.cloud_sync_icon_pack_last_time'))
+                        .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                        .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+                        .fontWeight(FontWeight.Regular)
+                        .layoutWeight(1)
+                      Text((this.iconPackBackupTime != null && this.iconPackBackupTime !== '') ?
+                        this.iconPackBackupTime : $r('app.string.cloud_sync_never'))
+                        .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                        .fontColor((this.iconPackBackupTime != null && this.iconPackBackupTime !== '') ?
+                          $r('sys.color.ohos_id_color_text_primary') :
+                          $r('sys.color.ohos_id_color_text_secondary'))
+                        .fontWeight(FontWeight.Medium)
+                    }
+                    .width('100%')
+                    .padding($r('sys.float.padding_level8'))
+
+                    SubItemDivider()
+
+                    Row() {
+                      Text($r('app.string.cloud_sync_icon_pack_source_device'))
+                        .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                        .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+                        .fontWeight(FontWeight.Regular)
+                        .layoutWeight(1)
+                      Text((this.iconPackSourceDevice !== null && this.iconPackSourceDevice !== '') ?
+                        this.iconPackSourceDevice : '-')
+                        .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                        .fontColor((this.iconPackSourceDevice !== null && this.iconPackSourceDevice !== '') ?
+                          $r('sys.color.ohos_id_color_text_primary') :
+                          $r('sys.color.ohos_id_color_text_secondary'))
+                        .fontWeight(FontWeight.Medium)
+                    }
+                    .width('100%')
+                    .padding($r('sys.float.padding_level8'))
+
+                    SubItemDivider()
+
+                    Row() {
+                      Text($r('app.string.cloud_sync_icon_pack_hint'))
+                        .fontSize($r('sys.float.ohos_id_text_size_caption'))
+                        .fontColor($r('sys.color.ohos_id_color_text_secondary'))
+                        .layoutWeight(1)
+                    }
+                    .width('100%')
+                    .padding($r('sys.float.padding_level8'))
+                  }
+                }
+                .padding({ left: $r('sys.float.padding_level8'), right: $r('sys.float.padding_level8') })
+
 
 
                 ListItem() {
@@ -378,6 +523,18 @@ export struct ShowCloudSyncDetailsPage {
     .onReady((context: NavDestinationContext) => {
       this.pageInfos = context.pathStack;
     })
+  }
+
+  /** 图标包备份状态文本 */
+  private getIconPackBackupStatusText(): ResourceStr {
+    if (this.iconPackBackupCount === 0) {
+      return $r('app.string.cloud_sync_icon_pack_status_empty');
+    }
+    if (!this.iconPackBackupExists) {
+      return $r('app.string.cloud_sync_icon_pack_status_none');
+    }
+    const sizeStr = this.formatFileSize(this.iconPackBackupSize);
+    return `${this.iconPackBackupCount} ${$r('app.string.cloud_sync_icon_pack_status_done_suffix')} ${sizeStr}`;
   }
 
   /** FileSync 状态码 → i18n 文本映射（0=上传中, 1=上传失败, 2=下载中, 3=下载失败, 4=完成, 5=已停止） */
