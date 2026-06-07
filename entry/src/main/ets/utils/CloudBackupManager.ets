@@ -430,9 +430,9 @@ export class CloudBackupManager {
       let tokens: TokenConfig[] = [];
       let enabledPacks: string[] = [];
       const payload = JSON.parse(decrypted) as CloudBackupPayload;
-      if (payload.tokens !== undefined && payload.tokens !== null && payload.tokens.length > 0) {
+      if (payload && payload.tokens !== undefined && payload.tokens !== null) {
         tokens = payload.tokens;
-        if (payload.enabledPacks !== undefined && payload.enabledPacks !== null && payload.enabledPacks.length > 0) {
+        if (payload.enabledPacks !== undefined && payload.enabledPacks !== null) {
           enabledPacks = payload.enabledPacks;
         }
       } else {

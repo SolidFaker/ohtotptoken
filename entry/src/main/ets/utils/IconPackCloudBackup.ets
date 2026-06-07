@@ -471,7 +471,7 @@ export class IconPackCloudBackup {
     const iconPackDir = this.filesDir + '/icon_packs';
     const userIconDir = this.filesDir + '/user_icons';
 
-    TokenIconPacks.addUserIconPack(userIconDir);
+    await TokenIconPacks.addUserIconPack(userIconDir);
     try {
       const paths = await fs.listFile(iconPackDir);
       for (const path of paths) {
