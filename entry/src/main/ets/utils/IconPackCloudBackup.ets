@@ -250,12 +250,12 @@ export class IconPackCloudBackup {
       try {
         const destIconDir = stagingDir + '/icon_packs';
         await fs.mkdir(destIconDir);
-        this.copyDirRecursive(iconPackDir, destIconDir);
+        await this.copyDirRecursive(iconPackDir, destIconDir);
       } catch (_) {}
       try {
         const destUserDir = stagingDir + '/user_icons';
         await fs.mkdir(destUserDir);
-        this.copyDirRecursive(userIconDir, destUserDir);
+        await this.copyDirRecursive(userIconDir, destUserDir);
       } catch (_) {}
 
       // 4. 压缩 staging 目录为 zip
@@ -266,7 +266,7 @@ export class IconPackCloudBackup {
 
       // 5. 将 zip 复制到 cloudDir
       const cloudZipPath = this.cloudDir + '/' + ICON_PACK_BACKUP_ZIP;
-      fs.copyFileSync(tempZipPath, cloudZipPath);
+      await fs.copyFile(tempZipPath, cloudZipPath);
 
       // 6. 写入伴生元数据文件（~1-2KB，含设备信息、时间戳、图标包列表）
       const syncMeta = new SyncMetaRecord();
@@ -292,7 +292,7 @@ export class IconPackCloudBackup {
       hilog.error(DOMAIN, TAG, `backupIconPacks: error=${JSON.stringify(e)}`);
       return false;
     } finally {
-      this.removeDirRecursive(stagingDir);
+      await this.removeDirRecursive(stagingDir);
       try {
         await fs.unlink(tempZipPath);
       } catch (_) {}
@@ -400,10 +400,10 @@ export class IconPackCloudBackup {
       const tempIconPacks = tempDir + '/icon_packs';
       const tempUserIcons = tempDir + '/user_icons';
       try {
-        this.copyDirRecursive(tempIconPacks, iconPackDir);
+        await this.copyDirRecursive(tempIconPacks, iconPackDir);
       } catch (_) {}
       try {
-        this.copyDirRecursive(tempUserIcons, userIconDir);
+        await this.copyDirRecursive(tempUserIcons, userIconDir);
       } catch (_) {}
 
       // 读取元数据
@@ -414,7 +414,7 @@ export class IconPackCloudBackup {
       } catch (_) {}
 
       // 清理临时目录
-      this.removeDirRecursive(tempDir);
+      await this.removeDirRecursive(tempDir);
 
       if (meta) {
         // 处理云端标记为已删除的图标包
@@ -605,43 +605,43 @@ export class IconPackCloudBackup {
     return buffer.from(uint8Array).toString('utf-8');
   }
 
-  private removeDirRecursive(dirPath: string): void {
+  private async removeDirRecursive(dirPath: string): Promise<void> {
     try {
-      const files = fs.listFileSync(dirPath);
+      const files = await fs.listFile(dirPath);
       for (const file of files) {
         const fullPath = dirPath + '/' + file;
         try {
-          const stat = fs.statSync(fullPath);
+          const stat = await fs.stat(fullPath);
           if (stat.isDirectory()) {
-            this.removeDirRecursive(fullPath);
+            await this.removeDirRecursive(fullPath);
           } else {
-            fs.unlinkSync(fullPath);
+            await fs.unlink(fullPath);
           }
         } catch (e) {
           hilog.warn(DOMAIN, TAG, `removeDirRecursive: failed to remove ${fullPath}: ${JSON.stringify(e)}`);
         }
       }
-      fs.rmdirSync(dirPath);
+      await fs.rmdir(dirPath);
     } catch (e) {
       hilog.warn(DOMAIN, TAG, `removeDirRecursive: failed to process ${dirPath}: ${JSON.stringify(e)}`);
     }
   }
 
-  private copyDirRecursive(srcDir: string, destDir: string): void {
+  private async copyDirRecursive(srcDir: string, destDir: string): Promise<void> {
     try {
-      const files = fs.listFileSync(srcDir);
+      const files = await fs.listFile(srcDir);
       for (const file of files) {
         const srcPath = srcDir + '/' + file;
         const destPath = destDir + '/' + file;
         try {
-          const stat = fs.statSync(srcPath);
+          const stat = await fs.stat(srcPath);
           if (stat.isDirectory()) {
             try {
-              fs.mkdirSync(destPath);
+              await fs.mkdir(destPath);
             } catch (_) {}
-            this.copyDirRecursive(srcPath, destPath);
+            await this.copyDirRecursive(srcPath, destPath);
           } else {
-            fs.copyFileSync(srcPath, destPath);
+            await fs.copyFile(srcPath, destPath);
           }
         } catch (e) {
           hilog.warn(DOMAIN, TAG, `copyDirRecursive: failed to copy ${srcPath}: ${JSON.stringify(e)}`);
