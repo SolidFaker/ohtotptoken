@@ -533,8 +533,9 @@ export struct ShowCloudSyncDetailsPage {
     if (!this.iconPackBackupExists) {
       return $r('app.string.cloud_sync_icon_pack_status_none');
     }
+    const suffix = this.appCtx.resourceManager.getStringSync($r('app.string.cloud_sync_icon_pack_status_done_suffix').id);
     const sizeStr = this.formatFileSize(this.iconPackBackupSize);
-    return `${this.iconPackBackupCount} ${$r('app.string.cloud_sync_icon_pack_status_done_suffix')} ${sizeStr}`;
+    return `${this.iconPackBackupCount} ${suffix} ${sizeStr}`;
   }
 
   /** FileSync 状态码 → i18n 文本映射（0=上传中, 1=上传失败, 2=下载中, 3=下载失败, 4=完成, 5=已停止） */
