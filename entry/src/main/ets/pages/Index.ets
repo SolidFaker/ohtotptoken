@@ -430,7 +430,11 @@ struct Index {
    * 内部通过状态机保证不会与备份/清理操作冲突
    */
   private async checkAndRestoreIconPacks(): Promise<void> {
-    await IconPackCloudBackup.getInstance().checkAndAutoRestore();
+    try {
+      await IconPackCloudBackup.getInstance().checkAndAutoRestore();
+    } catch (err) {
+      hilog.error(0xFF00, 'Index', `checkAndRestoreIconPacks failed: ${JSON.stringify(err)}`);
+    }
   }
 
   /**

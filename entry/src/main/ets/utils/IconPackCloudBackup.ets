@@ -236,7 +236,10 @@ export class IconPackCloudBackup {
     const tempZipPath = this.cacheDir + '/' + ICON_PACK_BACKUP_ZIP;
 
     try {
-      // 1. 创建 staging 目录
+      // 1. 清理并创建 staging 目录（防止上次中断残留旧文件污染本次备份）
+      try {
+        await this.removeDirRecursive(stagingDir);
+      } catch (_) {}
       try {
         await fs.mkdir(stagingDir);
       } catch (_) {}
@@ -475,8 +478,12 @@ export class IconPackCloudBackup {
     try {
       const paths = await fs.listFile(iconPackDir);
       for (const path of paths) {
+        const fullPath = iconPackDir + '/' + path;
+        if (TokenIconPacks.aegis_icon_packs.some(pack => pack.on_device_path === fullPath)) {
+          continue;
+        }
         try {
-          await TokenIconPacks.addAegisIconPack(iconPackDir + '/' + path);
+          await TokenIconPacks.addAegisIconPack(fullPath);
         } catch (err) {
           hilog.warn(DOMAIN, TAG, `refreshIconPackState: failed to load pack ${path}: ${JSON.stringify(err)}`);
         }
@@ -540,8 +547,9 @@ export class IconPackCloudBackup {
     }
     try {
       const cloudZipPath = this.cloudDir + '/' + ICON_PACK_BACKUP_ZIP;
-      await fs.unlink(cloudZipPath);
-      // 同步删除伴生元数据文件
+      try {
+        await fs.unlink(cloudZipPath);
+      } catch (_) {}
       try {
         await fs.unlink(this.cloudDir + '/' + SYNC_META_FILE);
       } catch (_) {}
@@ -596,13 +604,21 @@ export class IconPackCloudBackup {
   }
 
   private async readFileContent(filePath: string): Promise<string> {
-    const stat = await fs.stat(filePath);
-    const file = fs.openSync(filePath, fs.OpenMode.READ_ONLY);
-    const bufferArray = new ArrayBuffer(stat.size);
-    const readLen = fs.readSync(file.fd, bufferArray);
-    fs.closeSync(file);
-    const uint8Array = new Uint8Array(bufferArray.slice(0, readLen));
-    return buffer.from(uint8Array).toString('utf-8');
+    let file: fs.File | null = null;
+    try {
+      const stat = await fs.stat(filePath);
+      file = await fs.open(filePath, fs.OpenMode.READ_ONLY);
+      const bufferArray = new ArrayBuffer(stat.size);
+      const readLen = await fs.read(file.fd, bufferArray);
+      const uint8Array = new Uint8Array(bufferArray.slice(0, readLen));
+      return buffer.from(uint8Array).toString('utf-8');
+    } finally {
+      if (file) {
+        try {
+          await fs.close(file);
+        } catch (_) {}
+      }
+    }
   }
 
   private async removeDirRecursive(dirPath: string): Promise<void> {
