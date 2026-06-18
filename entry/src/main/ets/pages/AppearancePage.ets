@@ -40,23 +40,33 @@ export struct AppearancePage {
   // 健康路径下兜底计时器虽每秒触发一次，但不产生 emit（不触发 TokenItem 重复计算 HMAC），开销可忽略。
   private timestampIntervalId: number = -1;
   private lastTimestampTick: number = 0;
+  // 标记“正在由本页兜底广播”，避免自身 emit 同步回调时误刷新心跳。
+  private selfEmitting: boolean = false;
   private onTimestampHandler: () => void = () => {};
   // 判定全局心跳缺失的阈值（毫秒）。全局计时器为 1s 一次，取 1.5s 留出抖动余量。
   private static readonly HEARTBEAT_TIMEOUT_MS: number = 1500;
 
   aboutToAppear(): void {
     this.lastTimestampTick = systemDateTime.getTime();
-    // 仅用于探测全局心跳：收到事件即刷新最近心跳时间，参数本身不使用。
+    // 仅用于探测全局心跳：仅当事件来源为“全局 Index”（非本页兜底）时才刷新心跳时间。
+    // 若不区分来源，本页兜底广播会经 eventHub 同步回调自身，把心跳刷新为当前时间，
+    // 导致兜底计时器每 2s 才触发一次（出现卡顿）。
     this.onTimestampHandler = (): void => {
-      this.lastTimestampTick = systemDateTime.getTime();
+      if (!this.selfEmitting) {
+        this.lastTimestampTick = systemDateTime.getTime();
+      }
     };
     this.context.eventHub?.on(EVENT_NAMES.TIMESTAMP_CHANGED, this.onTimestampHandler);
 
-    // 兜底计时器：仅在全局心跳超时时才广播，避免与 Index 重复推送
+    // 兜底计时器：仅在全局心跳超时时才广播，避免与 Index 重复推送。
+    // eventHub.emit 为同步调用，故用 selfEmitting 标志包裹以阻止自身回调污染心跳，
+    // 保证全局心跳缺失时兜底能稳定每 1s 广播一次。
     this.timestampIntervalId = setInterval(() => {
       if (systemDateTime.getTime() - this.lastTimestampTick > AppearancePage.HEARTBEAT_TIMEOUT_MS) {
         const timestamp = Math.floor(systemDateTime.getTime() / 1000);
+        this.selfEmitting = true;
         this.context.eventHub?.emit(EVENT_NAMES.TIMESTAMP_CHANGED, timestamp, false);
+        this.selfEmitting = false;
       }
     }, 1000);
   }
