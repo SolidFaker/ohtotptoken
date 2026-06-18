@@ -11,6 +11,7 @@ import { QRCodeDialog } from '../dialogs/QRCodeDialog';
 import { AppWindowInfo } from '../entryability/EntryAbility';
 import { TokenStore } from '../utils/TokenStore';
 import { ConfigurationConstant, common } from '@kit.AbilityKit';
+import { AppFonts } from '../utils/AppFonts';
 import { ArcTokenIcon } from './ArcTokenIcon';
 
 let current_token_hide_map: Map<string, boolean> = new Map();
@@ -217,6 +218,7 @@ export struct ArcTokenItem {
             .fontColor('#ffe0e0e0')
             .fontSize(this.token_preference.app_appearance_token_font_size)
             .fontWeight(this.token_preference.app_appearance_token_font_weight)
+            .fontFamily(AppFonts.CODE_FONT)
             .gesture(
               LongPressGesture()
                 .onAction(() => {
@@ -237,6 +239,7 @@ export struct ArcTokenItem {
               .maxLines(1)
               .fontColor($r('app.color.str_gray'))
               .fontSize(10)
+              .fontFamily(AppFonts.CODE_FONT)
           }
         }
         .onClick(() => {

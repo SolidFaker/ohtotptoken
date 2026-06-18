@@ -18,6 +18,7 @@ import {
   SuffixCustomBuilder
 } from '@kit.UIDesignKit';
 import { CommonConstants } from '../utils/CommonConstants';
+import { AppFonts } from '../utils/AppFonts';
 
 let current_token_hide_map: Map<string, boolean> = new Map();
 let tkStore = TokenStore.getInstance();
@@ -227,6 +228,7 @@ export struct TokenItem {
                 this.token_color_expiring : this.token_color_normal)
               .fontSize(this.token_preference.app_appearance_token_font_size)
               .fontWeight(this.token_preference.app_appearance_token_font_weight)
+              .fontFamily(AppFonts.CODE_FONT)
               .gesture(
                 LongPressGesture()
                   .onAction(() => {
@@ -247,6 +249,7 @@ export struct TokenItem {
                 .maxLines(1)
                 .fontColor($r('app.color.str_gray'))
                 .fontSize(10)
+                .fontFamily(AppFonts.CODE_FONT)
             }
           }
 
