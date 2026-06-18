@@ -28,21 +28,44 @@ export struct AppearancePage {
   // 使用 AppStorage 获取 context，避免在字段初始化阶段调用 getUIContext()（此时 build() 尚未执行）
   private context: common.UIAbilityContext = AppStorage.get('appContext') as common.UIAbilityContext;
   private scroller: Scroller = new Scroller();
+
+  // [性能优化] 本页不再无条件自建 1s 计时器。
+  // 首页 Index 持有全局唯一时间计时器，每秒经 eventHub 广播 TIMESTAMP_CHANGED，
+  // 预览区内的 TokenItem 自身已订阅该事件，正常情况下可直接复用、无需重复推送。
+  //
+  // [防御性兜底] 为避免对“Index 必然挂载且其计时器必然在跑”这一隐式假设产生硬依赖
+  // （例如未来路由调整使本页在 Index 之外打开），这里订阅 TIMESTAMP_CHANGED 来探测全局心跳：
+  //   - 收到事件 → 记录最近心跳时间，说明全局源健康，本页不做任何额外推送；
+  //   - 超过阈值仍无心跳 → 全局源疑似缺失，本页启动兜底计时器自行广播，保证预览倒计时持续刷新。
+  // 健康路径下兜底计时器虽每秒触发一次，但不产生 emit（不触发 TokenItem 重复计算 HMAC），开销可忽略。
   private timestampIntervalId: number = -1;
+  private lastTimestampTick: number = 0;
+  private onTimestampHandler: () => void = () => {};
+  // 判定全局心跳缺失的阈值（毫秒）。全局计时器为 1s 一次，取 1.5s 留出抖动余量。
+  private static readonly HEARTBEAT_TIMEOUT_MS: number = 1500;
 
   aboutToAppear(): void {
+    this.lastTimestampTick = systemDateTime.getTime();
+    // 仅用于探测全局心跳：收到事件即刷新最近心跳时间，参数本身不使用。
+    this.onTimestampHandler = (): void => {
+      this.lastTimestampTick = systemDateTime.getTime();
+    };
+    this.context.eventHub?.on(EVENT_NAMES.TIMESTAMP_CHANGED, this.onTimestampHandler);
+
+    // 兜底计时器：仅在全局心跳超时时才广播，避免与 Index 重复推送
     this.timestampIntervalId = setInterval(() => {
-      const timestamp = Math.floor(systemDateTime.getTime() / 1000);
-      if (this.context.eventHub != undefined) {
-        this.context.eventHub.emit(EVENT_NAMES.TIMESTAMP_CHANGED, timestamp, false);
+      if (systemDateTime.getTime() - this.lastTimestampTick > AppearancePage.HEARTBEAT_TIMEOUT_MS) {
+        const timestamp = Math.floor(systemDateTime.getTime() / 1000);
+        this.context.eventHub?.emit(EVENT_NAMES.TIMESTAMP_CHANGED, timestamp, false);
       }
     }, 1000);
   }
 
-  // 清理 setInterval，防止页面弹出后计时器持续泄漏
   aboutToDisappear(): void {
+    this.context.eventHub?.off(EVENT_NAMES.TIMESTAMP_CHANGED, this.onTimestampHandler);
     if (this.timestampIntervalId !== -1) {
       clearInterval(this.timestampIntervalId);
+      this.timestampIntervalId = -1;
     }
   }
 
