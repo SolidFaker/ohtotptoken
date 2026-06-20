@@ -593,14 +593,6 @@ export struct AppearancePage {
               iconColor: $r('sys.color.icon_primary')
             }
           },
-          backgroundStyle: {
-            maskExtraHeight: 0
-          }
-        },
-        scrollEffectStyle: {
-          backgroundStyle: {
-            maskExtraHeight: 0
-          }
         },
         scrollEffectOpts: {
           enableScrollEffect: true,

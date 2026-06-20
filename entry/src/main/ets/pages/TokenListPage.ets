@@ -9,7 +9,6 @@ import { TokenStore } from "../utils/TokenStore";
 import { convertToken2URI } from "../utils/TokenUtils";
 import { AppStorageV2, curves, window } from "@kit.ArkUI";
 import { AppWindowInfo } from "../entryability/EntryAbility";
-import { CommonConstants } from "../utils/CommonConstants";
 import { GenericDataSource } from "../utils/GenericDataSource";
 import { showSnackBar, SnackBarNotifyType } from "../utils/HdsSnackBarUtils";
 import { common } from "@kit.AbilityKit";
@@ -174,10 +173,6 @@ export struct TokenListPage {
           ListItemGroup() {
             ListItem() {
               Column() {
-                Row()
-                  .height(this.TabBarVisible ? CommonConstants.AVOID_TOP_BASE_HEIGHT + this.appTopAvoidHeight : this.appTopAvoidHeight)
-                  .width('100%')
-                
                 Stack({ alignContent: Alignment.End }) {
                   TextInput({
                     placeholder: $r('app.string.token_search_placeholder'),
@@ -208,7 +203,6 @@ export struct TokenListPage {
                   x: 0,
                   y: this.token_list_search_visible || this.token_list_search_enable ? 0 : -12
                 })
-                .clip(true)
               }
             }
           }
@@ -262,6 +256,7 @@ export struct TokenListPage {
         .chainAnimation(this.token_preference.app_appearance_chain_animation_enable)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+        .clip(false)
       }
       .alignItems(HorizontalAlign.Center)
     }

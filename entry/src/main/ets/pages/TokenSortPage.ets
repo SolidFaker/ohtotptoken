@@ -83,6 +83,7 @@ export struct TokenSortPage {
         .height('100%')
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+        .contentStartOffset(this.window.AvoidTopHeight + CommonConstants.AVOID_TOP_BASE_HEIGHT)
         .contentEndOffset(this.window.AvoidBottomHeight)
       }
       .backgroundColor($r('app.color.window_background'))
@@ -92,30 +93,20 @@ export struct TokenSortPage {
     .titleMode(HdsNavDestinationTitleMode.MINI)
     .titleBar({
       avoidLayoutSafeArea: true,
-      enableComponentSafeArea: true,
       style: {
         originalStyle: {
           contentStyle: {
             titleStyle: {
               mainTitleColor: $r('sys.color.font_primary'),
-              subTitleColor: $r('sys.color.font_secondary')
             },
             backIconStyle: {
               iconColor: $r('sys.color.icon_primary')
             }
           },
-          backgroundStyle: {
-            maskExtraHeight: 0
-          }
-        },
-        scrollEffectStyle: {
-          backgroundStyle: {
-            maskExtraHeight: 0
-          }
         },
         scrollEffectOpts: {
           enableScrollEffect: true,
-          scrollEffectType: this.scrollEffectType
+          scrollEffectType: this.scrollEffectType,
         },
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,
