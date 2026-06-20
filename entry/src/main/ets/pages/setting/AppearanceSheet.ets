@@ -14,7 +14,6 @@ import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { throttle } from '../../utils/UiUtils';
 import { AppearancePage } from '../AppearancePage';
 import { hdsMaterial, HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
-import { CommonConstants } from '../../utils/CommonConstants';
 
 @Preview
 @ComponentV2
@@ -39,9 +38,6 @@ export struct AppearanceSheet {
       HdsNavigation(this.pageInfos) {
         Column() {
           List({ scroller: this.sheetScroller, space: 10 }) {
-            ListItem()
-              .height(CommonConstants.AVOID_TOP_BASE_HEIGHT)
-
             ListItem() {
               SettingItem({ title: "" }) {
                 SubItemToggle({
@@ -129,6 +125,7 @@ export struct AppearanceSheet {
             }
             .padding({ left: 10, right: 10 })
           }
+          .clip(false)
           .width('100%')
           .height('100%')
           .scrollBar(BarState.Off)
@@ -145,6 +142,7 @@ export struct AppearanceSheet {
       .bindToScrollable([this.sheetScroller])
       .titleMode(HdsNavigationTitleMode.MODAL)
       .titleBar({
+        enableComponentSafeArea: true,
         style: {
           originalStyle: {
             contentStyle: {
@@ -156,14 +154,6 @@ export struct AppearanceSheet {
                 iconColor: $r('sys.color.icon_primary')
               }
             },
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
-          },
-          scrollEffectStyle: {
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
           },
           scrollEffectOpts: {
             enableScrollEffect: true,

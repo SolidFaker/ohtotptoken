@@ -5,7 +5,6 @@ import { throttle, startBrowsableAbility } from '../../utils/UiUtils';
 import { ROUTE_NAMES, EXTERNAL_URLS } from '../../utils/AppPreference';
 import { WebPage, WebPageParams } from '../WebPage';
 import { hdsMaterial, HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
-import { CommonConstants } from '../../utils/CommonConstants';
 import { SubItemDivider } from '../../components/SubItemDivider';
 
 @Preview
@@ -28,9 +27,6 @@ export struct FeedbackSheet {
       HdsNavigation(this.pageInfos) {
         Column() {
           List({ scroller: this.sheetScroller, space: 10 }) {
-            ListItem()
-              .height(CommonConstants.AVOID_TOP_BASE_HEIGHT)
-
             ListItem() {
               SettingItem({ title: "" }) {
                 SubItemButton({
@@ -65,6 +61,7 @@ export struct FeedbackSheet {
             }
             .padding({ left: 10, right: 10 })
           }
+          .clip(false)
           .width('100%')
           .height('100%')
           .scrollBar(BarState.Off)
@@ -84,6 +81,7 @@ export struct FeedbackSheet {
       .bindToScrollable([this.sheetScroller])
       .titleMode(HdsNavigationTitleMode.MODAL)
       .titleBar({
+        enableComponentSafeArea: true,
         style: {
           originalStyle: {
             contentStyle: {
@@ -92,14 +90,6 @@ export struct FeedbackSheet {
                 subTitleColor: $r('sys.color.font_secondary')
               }
             },
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
-          },
-          scrollEffectStyle: {
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
           },
           scrollEffectOpts: {
             enableScrollEffect: true,

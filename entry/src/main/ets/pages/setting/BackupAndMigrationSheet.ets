@@ -18,7 +18,6 @@ import { ShowCloudSyncDetailsPage } from '../ShowCloudSyncDetailsPage';
 import { ShowCloudBackupHistoryPage } from '../ShowCloudBackupHistoryPage';
 import { HuaweiAccountManager } from '../../utils/HuaweiAccountManager';
 import { hdsMaterial, HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
-import { CommonConstants } from '../../utils/CommonConstants';
 import { TokenImporterRegistry, TokenImporter } from '../../utils/importers/TokenImporter';
 import { URIConfigDialog } from '../../dialogs/URIConfigDialog';
 
@@ -240,9 +239,6 @@ export struct BackupAndMigrationSheet {
       HdsNavigation(this.pageInfos) {
         Column({ space: LengthMetrics.vp(12).value }) {
           List({ scroller: this.sheetScroller, space: 10 }) {
-            ListItem()
-              .height(CommonConstants.AVOID_TOP_BASE_HEIGHT)
-
             ListItem() {
               SettingItem({ title: $r('app.string.setting_backup') }) {
                 SubItemButton({
@@ -364,7 +360,9 @@ export struct BackupAndMigrationSheet {
             }
             .padding({ left: 10, right: 10 })
           }
+          .clip(false)
           .width('100%')
+          .height('100%')
           .layoutWeight(1)
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
@@ -382,6 +380,7 @@ export struct BackupAndMigrationSheet {
       .bindToScrollable([this.sheetScroller])
       .titleMode(HdsNavigationTitleMode.MODAL)
       .titleBar({
+        enableComponentSafeArea: true,
         style: {
           originalStyle: {
             contentStyle: {
@@ -393,14 +392,6 @@ export struct BackupAndMigrationSheet {
                 iconColor: $r('sys.color.icon_primary')
               }
             },
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
-          },
-          scrollEffectStyle: {
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
           },
           scrollEffectOpts: {
             enableScrollEffect: true,

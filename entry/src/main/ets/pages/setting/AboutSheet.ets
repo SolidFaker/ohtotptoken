@@ -5,7 +5,6 @@ import { AppStorageV2, curves } from '@kit.ArkUI';
 import { showSnackBar, SnackBarNotifyType } from '../../utils/HdsSnackBarUtils';
 import { AppPreference, PREF_KEYS } from '../../utils/AppPreference';
 import { hdsMaterial, HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
-import { CommonConstants } from '../../utils/CommonConstants';
 
 @Preview
 @ComponentV2
@@ -39,9 +38,6 @@ export struct AboutSheet {
     Column() {
       HdsNavigation() {
         List({ scroller: this.sheetScroller, space: 10 }) {
-          ListItem()
-            .height(CommonConstants.AVOID_TOP_BASE_HEIGHT)
-
           ListItem() {
             SettingItem({ title: "" }) {
               Text(this.str_about_app)
@@ -90,15 +86,8 @@ export struct AboutSheet {
             }
             .padding({ left: 10, right: 10 })
           }
-
-          ListItemGroup() {
-            ListItem() {
-              Row()
-                .width('100%')
-                .height(60)
-            }
-          }
         }
+        .clip(false)
         .width('100%')
         .height('100%')
         .scrollBar(BarState.Off)
@@ -110,6 +99,7 @@ export struct AboutSheet {
       .bindToScrollable([this.sheetScroller])
       .titleMode(HdsNavigationTitleMode.MODAL)
       .titleBar({
+        enableComponentSafeArea: true,
         style: {
           originalStyle: {
             contentStyle: {
@@ -121,14 +111,6 @@ export struct AboutSheet {
                 iconColor: $r('sys.color.icon_primary')
               }
             },
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
-          },
-          scrollEffectStyle: {
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
           },
           scrollEffectOpts: {
             enableScrollEffect: true,

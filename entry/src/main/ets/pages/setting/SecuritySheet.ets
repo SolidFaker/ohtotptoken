@@ -9,7 +9,6 @@ import { SubItemDivider } from '../../components/SubItemDivider';
 import { AppWindowInfo } from '../../entryability/EntryAbility';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { hdsMaterial, HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
-import { CommonConstants } from '../../utils/CommonConstants';
 import { DlpAntiPeepManager } from '../../utils/DlpAntiPeepManager';
 import { common } from '@kit.AbilityKit';
 
@@ -31,9 +30,6 @@ export struct SecuritySheet {
       HdsNavigation() {
         Column() {
           List({ scroller: this.sheetScroller, space: 10 }) {
-            ListItem()
-              .height(CommonConstants.AVOID_TOP_BASE_HEIGHT)
-
             ListItem() {
               SettingItem({ title: "" }) {
                 SubItemToggle({
@@ -145,6 +141,7 @@ export struct SecuritySheet {
             }
             .padding({ left: 10, right: 10 })
           }
+          .clip(false)
           .width('100%')
           .height('100%')
           .scrollBar(BarState.Off)
@@ -160,6 +157,7 @@ export struct SecuritySheet {
       .bindToScrollable([this.sheetScroller])
       .titleMode(HdsNavigationTitleMode.MODAL)
       .titleBar({
+        enableComponentSafeArea: true,
         style: {
           originalStyle: {
             contentStyle: {
@@ -171,14 +169,6 @@ export struct SecuritySheet {
                 iconColor: $r('sys.color.icon_primary')
               }
             },
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
-          },
-          scrollEffectStyle: {
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
           },
           scrollEffectOpts: {
             enableScrollEffect: true,

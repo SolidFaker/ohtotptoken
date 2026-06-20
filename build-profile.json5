@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "C:\\Users\\evelo\\.ohos\\config\\default_ohtotptoken_V9sJGc5Sthk3VHwBTW8ioyLx7Yr9aJmD60s1yuv5aGw=.cer",
+          "certpath": "C:\\Users\\PC\\.ohos\\config\\default_ohtotptoken_EoFbYjQ21YyI6klIPwGuRezi5pWw2uTKD2aaUhgpuik=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001A28FE9E6CC7CC19376378073E66A0AD826FF8C95C33EB7F83E2CEF318CC962B1C8D7C0C718403",
-          "profile": "C:\\Users\\evelo\\.ohos\\config\\default_ohtotptoken_V9sJGc5Sthk3VHwBTW8ioyLx7Yr9aJmD60s1yuv5aGw=.p7b",
+          "keyPassword": "0000001B1F03EA84434365246E9FEEA6974DFA628BAFA708AFF70E66EEAE3E13EB78EBC9A8C267791217F2",
+          "profile": "C:\\Users\\PC\\.ohos\\config\\default_ohtotptoken_EoFbYjQ21YyI6klIPwGuRezi5pWw2uTKD2aaUhgpuik=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "C:\\Users\\evelo\\.ohos\\config\\default_ohtotptoken_V9sJGc5Sthk3VHwBTW8ioyLx7Yr9aJmD60s1yuv5aGw=.p12",
-          "storePassword": "0000001A64DC643C992B600B44339E258E01C77B28C8A9170639EFD34F3FF030173AD8B2D645345E4173"
+          "storeFile": "C:\\Users\\PC\\.ohos\\config\\default_ohtotptoken_EoFbYjQ21YyI6klIPwGuRezi5pWw2uTKD2aaUhgpuik=.p12",
+          "storePassword": "0000001BC2A291F4623805FFDDF6678900E4AAABC899D6A5395B8DCCA164943C1801CF927CFD60B02A3696"
         }
       }
     ],

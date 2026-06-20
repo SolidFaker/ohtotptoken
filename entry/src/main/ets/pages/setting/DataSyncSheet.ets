@@ -10,7 +10,6 @@ import { PermissionManager } from '../../utils/PermissionManager';
 import { throttle } from '../../utils/UiUtils';
 import { ShowDataSyncDetailsPage } from '../ShowDataSyncDetailsPage';
 import { hdsMaterial, HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
-import { CommonConstants } from '../../utils/CommonConstants';
 
 @Preview
 @ComponentV2
@@ -50,9 +49,6 @@ export struct DataSyncSheet {
       HdsNavigation(this.pageInfos) {
         Column() {
           List({ scroller: this.sheetScroller, space: 10 }) {
-            ListItem()
-              .height(CommonConstants.AVOID_TOP_BASE_HEIGHT)
-
             ListItem() {
               SettingItem({ title: "" }) {
                 SubItemToggle({
@@ -82,6 +78,7 @@ export struct DataSyncSheet {
             }
             .padding({ left: 10, right: 10 })
           }
+          .clip(false)
           .width('100%')
           .height('100%')
           .scrollBar(BarState.Off)
@@ -101,6 +98,7 @@ export struct DataSyncSheet {
       .bindToScrollable([this.sheetScroller])
       .titleMode(HdsNavigationTitleMode.MODAL)
       .titleBar({
+        enableComponentSafeArea: true,
         style: {
           originalStyle: {
             contentStyle: {
@@ -112,14 +110,6 @@ export struct DataSyncSheet {
                 iconColor: $r('sys.color.icon_primary')
               }
             },
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
-          },
-          scrollEffectStyle: {
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
           },
           scrollEffectOpts: {
             enableScrollEffect: true,

@@ -962,13 +962,6 @@ struct Index {
   @Builder
   SettingEntryCardBuilder() {
     List({ space: 10, scroller: this.settingEntryScroller }) {
-      // 顶部占位空间，用于触发渐变模糊效果
-      ListItem() {
-        Column()
-          .width('100%')
-          .height(CommonConstants.AVOID_TOP_BASE_HEIGHT + this.window.AvoidTopHeight)
-      }
-
       // 华为账号登录卡片
       ListItem() {
         Row({ space: 16 }) {
@@ -1337,6 +1330,7 @@ struct Index {
         right: $r('sys.float.padding_level8'),
       })
     }
+    .clip(false)
     .chainAnimation(this.token_preference.app_appearance_chain_animation_enable)
     .width('100%')
     .height('100%')
@@ -1367,250 +1361,244 @@ struct Index {
   }
 
   build() {
-    Navigation(this.pageInfos) {
-    Stack() {
-      if (this.token_loading) {
-        Column() {
-          LoadingProgress()
-            .color(Color.White)
-          .width(80).height(80)
-        Text('Loading..')
-          .fontSize(16)
-          .fontColor(Color.White)
+    HdsNavigation(this.pageInfos) {
+      Stack() {
+        if (this.token_loading) {
+          Column() {
+            LoadingProgress()
+              .color(Color.White)
+              .width(80).height(80)
+            Text('Loading..')
+              .fontSize(16)
+              .fontColor(Color.White)
+          }
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#40000000')
+          .justifyContent(FlexAlign.Center)
+        } else if (
+          (this.window.HeightBreakpoint === HeightBreakpoint.HEIGHT_MD) &&
+            this.window.WidthBreakpoint === WidthBreakpoint.WIDTH_XS
+        ) {
+          ArcTokenListPage({
+            Tokens: this.CurrentTokens,
+            TabBarVisible: false,
+            appBottomAvoidHeight: this.window.AvoidBottomHeight,
+            appTopAvoidHeight: this.window.AvoidTopHeight,
+            appWindowSize: this.window.Size,
+            updateTokenConfig: this.updateTokenConfig,
+            updateTokenConfigs: this.updateTokenConfigs,
+            listScroller: this.arcTokenListScroller,
+          })
+        } else if (
+          (this.window.HeightBreakpoint === HeightBreakpoint.HEIGHT_MD ||
+            this.window.HeightBreakpoint === HeightBreakpoint.HEIGHT_SM) &&
+            this.window.WidthBreakpoint === WidthBreakpoint.WIDTH_SM
+        ) {
+          Column() {
+            TokenListPage({
+              Tokens: this.CurrentTokens,
+              TabBarVisible: false,
+              appBottomAvoidHeight: this.window.AvoidBottomHeight,
+              appTopAvoidHeight: this.window.AvoidTopHeight,
+              appWindowSize: this.window.Size,
+              updateTokenConfig: this.updateTokenConfig,
+              updateTokenConfigs: this.updateTokenConfigs,
+              listScroller: this.tokenListScroller,
+            })
+          }
+          .backgroundColor($r('app.color.window_background'))
+        } else {
+
+          Column() {
+            HdsTabs({ index: this.tab_bar_index }) {
+              TabContent() {
+                HdsNavigation() {
+                  TokenListPage({
+                    Tokens: this.CurrentTokens,
+                    TabBarVisible: true,
+                    appBottomAvoidHeight: this.window.AvoidBottomHeight,
+                    appTopAvoidHeight: this.window.AvoidTopHeight,
+                    appWindowSize: this.window.Size,
+                    updateTokenConfig: this.updateTokenConfig,
+                    updateTokenConfigs: this.updateTokenConfigs,
+                    listScroller: this.tokenListScroller,
+                  })
+                }
+                .mode(NavigationMode.Stack)
+                .bindToScrollable([this.tokenListScroller])
+                .titleMode(HdsNavigationTitleMode.MINI)
+                .hideBackButton(true) // 设置mini类型隐藏后退按钮
+                .titleBar({
+                  avoidLayoutSafeArea: true, // 状态栏安全区沉浸
+                  enableComponentSafeArea: true,
+                  style: {
+                    originalStyle: {
+                      contentStyle: {
+                        titleStyle: {
+                          mainTitleColor: $r('sys.color.font_primary'),
+                        },
+                        menuStyle: {
+                          iconColor: $r('sys.color.icon_primary')
+                        },
+                      }
+                    },
+                    scrollEffectOpts: {
+                      enableScrollEffect: true,
+                      scrollEffectType: this.currentScrollEffectType // 渐变模糊
+                    },
+                    systemMaterialEffect: {
+                      materialType: hdsMaterial.MaterialType.ADAPTIVE,
+                      materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+                    }
+                  },
+                  content: {
+                    title: {
+                      mainTitle: $r('app.string.EntryAbility_label'),
+                    },
+                    menu: {
+                      value: [
+                        {
+                          content: {
+                            label: $r('app.string.app_ua_search_token'),
+                            icon: $r('sys.symbol.magnifyingglass'),
+                            isEnabled: true,
+                            action: () => {
+                              if (this.appCtx.eventHub != undefined) this.appCtx.eventHub.emit(EVENT_NAMES.TOGGLE_TOKEN_SEARCH);
+                            }
+                          }
+                        },
+                        {
+                          content: {
+                            label: $r('app.string.app_ua_add_token'),
+                            icon: $r('sys.symbol.plus'),
+                            isEnabled: true,
+                            componentId: this.addTokenMenuTargetId,
+                            action: () => {
+                              this.openAddTokenMenu();
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                })
+              }
+              .backgroundColor($r('app.color.window_background'))
+              .tabBar(BottomTabBarStyle.of(
+                {
+                  normal: new SymbolGlyphModifier($r('sys.symbol.key_fill')),
+                  selected: new SymbolGlyphModifier($r('sys.symbol.key_fill'))
+                },
+                $r('app.string.tab_token'))
+                .verticalAlign(VerticalAlign.Center)
+              )
+              .tabIndex(0)
+
+              TabContent() {
+                // [冷启动优化] Setting Tab 懒加载：仅在用户首次切换到"我的"Tab 时构建组件树，
+                // 避免冷启动时一次性构建两个 TabContent 导致首帧 build 耗时增加
+                if (this.settingTabInitialized) {
+                  HdsNavigation() {
+                    this.SettingEntryCardBuilder()
+                  }
+                  .mode(NavigationMode.Stack)
+                  .bindToScrollable([this.settingEntryScroller])
+                  .titleMode(HdsNavigationTitleMode.MINI)
+                  .hideBackButton(true)
+                  .titleBar({
+                    avoidLayoutSafeArea: true,
+                    enableComponentSafeArea: true,
+                    style: {
+                      originalStyle: {
+                        contentStyle: {
+                          titleStyle: {
+                            mainTitleColor: $r('sys.color.font_primary'),
+                          },
+                          menuStyle: {
+                            iconColor: $r('sys.color.icon_primary')
+                          },
+                        },
+                      },
+                      scrollEffectOpts: {
+                        enableScrollEffect: true,
+                        scrollEffectType: this.currentScrollEffectType,
+                      },
+                      systemMaterialEffect: {
+                        materialType: hdsMaterial.MaterialType.ADAPTIVE,
+                        materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+                      }
+                    },
+                    content: {
+                      title: {
+                        mainTitle: $r('app.string.tab_me')
+                      },
+                      menu: {
+                        value: []
+                      }
+                    }
+                  })
+                }
+              }
+              .backgroundColor($r('app.color.window_background'))
+              .tabBar(BottomTabBarStyle.of(
+                {
+                  normal: new SymbolGlyphModifier($r('sys.symbol.person_crop_circle_fill_1')),
+                  selected: new SymbolGlyphModifier($r('sys.symbol.person_crop_circle_fill_1')),
+                },
+                $r('app.string.tab_me'))
+                .verticalAlign(VerticalAlign.Center)
+              )
+              .tabIndex(1)
+            }
+            .barBackgroundColor($r('app.color.tab_bar_bg'))
+            .backgroundColor($r('app.color.window_background'))
+            .layoutWeight(1)
+            .barOverlap(true)
+            .barBackgroundColor(Color.Transparent)
+            .barBackgroundBlurStyle(BlurStyle.Regular)
+            .barPosition(BarPosition.End)
+            .barFloatingStyle({
+              barBottomMargin: 28,
+              systemMaterialEffect: {
+                materialType: hdsMaterial.MaterialType.ADAPTIVE,
+                materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+              }
+            })
+            .vertical(false)
+            .barMode(BarMode.Fixed)
+            .animationDuration(300)
+            .onChange((index) => {
+              this.tab_bar_index = index;
+              // [冷启动优化] 用户首次切换到 Setting Tab 时触发懒加载构建
+              if (index === 1 && !this.settingTabInitialized) {
+                this.settingTabInitialized = true;
+              }
+            })
+          }
+        }
       }
       .width('100%')
       .height('100%')
-      .backgroundColor('#40000000')
-      .justifyContent(FlexAlign.Center)
-    } else if (
-      (this.window.HeightBreakpoint === HeightBreakpoint.HEIGHT_MD) &&
-        this.window.WidthBreakpoint === WidthBreakpoint.WIDTH_XS
-    ) {
-      ArcTokenListPage({
-        Tokens: this.CurrentTokens,
-        TabBarVisible: false,
-        appBottomAvoidHeight: this.window.AvoidBottomHeight,
-        appTopAvoidHeight: this.window.AvoidTopHeight,
-        appWindowSize: this.window.Size,
-        updateTokenConfig: this.updateTokenConfig,
-        updateTokenConfigs: this.updateTokenConfigs,
-        listScroller: this.arcTokenListScroller,
+      .allowDrop([uniformTypeDescriptor.UniformDataType.FILE])
+      .onDrop(() => {
+        this.DropFilesDialogIsOpen = false;
+        this.DropFilesDialogController?.close();
       })
-    } else if (
-      (this.window.HeightBreakpoint === HeightBreakpoint.HEIGHT_MD ||
-        this.window.HeightBreakpoint === HeightBreakpoint.HEIGHT_SM) &&
-        this.window.WidthBreakpoint === WidthBreakpoint.WIDTH_SM
-    ) {
-      Column() {
-        TokenListPage({
-          Tokens: this.CurrentTokens,
-          TabBarVisible: false,
-          appBottomAvoidHeight: this.window.AvoidBottomHeight,
-          appTopAvoidHeight: this.window.AvoidTopHeight,
-          appWindowSize: this.window.Size,
-          updateTokenConfig: this.updateTokenConfig,
-          updateTokenConfigs: this.updateTokenConfigs,
-          listScroller: this.tokenListScroller,
-        })
-      }
-      .backgroundColor($r('app.color.window_background'))
-    } else {
-
-      Column() {
-        HdsTabs({ index: this.tab_bar_index }) {
-          TabContent() {
-            HdsNavigation() {
-              TokenListPage({
-                Tokens: this.CurrentTokens,
-                TabBarVisible: true,
-                appBottomAvoidHeight: this.window.AvoidBottomHeight,
-                appTopAvoidHeight: this.window.AvoidTopHeight,
-                appWindowSize: this.window.Size,
-                updateTokenConfig: this.updateTokenConfig,
-                updateTokenConfigs: this.updateTokenConfigs,
-                listScroller: this.tokenListScroller,
-              })
-            }
-            .mode(NavigationMode.Stack)
-            .bindToScrollable([this.tokenListScroller])
-            .titleMode(HdsNavigationTitleMode.MINI)
-            .hideBackButton(true) // 设置mini类型隐藏后退按钮
-            .titleBar({
-              avoidLayoutSafeArea: true, // 状态栏安全区沉浸
-              style: {
-                originalStyle: {
-                  contentStyle: {
-                    titleStyle: {
-                      mainTitleColor: $r('sys.color.font_primary'),
-                    },
-                    menuStyle: {
-                      iconColor: $r('sys.color.icon_primary')
-                    },
-                  }
-                },
-                scrollEffectOpts: {
-                  enableScrollEffect: true,
-                  scrollEffectType: this.currentScrollEffectType // 渐变模糊
-                },
-                systemMaterialEffect: {
-                  materialType: hdsMaterial.MaterialType.ADAPTIVE,
-                  materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-                }
-              },
-              content: {
-                title: {
-                  mainTitle: $r('app.string.EntryAbility_label'),
-                },
-                menu: {
-                  value: [
-                    {
-                      content: {
-                        label: $r('app.string.app_ua_search_token'),
-                        icon: $r('sys.symbol.magnifyingglass'),
-                        isEnabled: true,
-                        action: () => {
-                          if (this.appCtx.eventHub != undefined) this.appCtx.eventHub.emit(EVENT_NAMES.TOGGLE_TOKEN_SEARCH);
-                        }
-                      }
-                    },
-                    {
-                      content: {
-                        label: $r('app.string.app_ua_add_token'),
-                        icon: $r('sys.symbol.plus'),
-                        isEnabled: true,
-                        componentId: this.addTokenMenuTargetId,
-                        action: () => {
-                          this.openAddTokenMenu();
-                        }
-                      }
-                    }
-                  ]
-                }
-              }
-            })
-          }
-          .backgroundColor($r('app.color.window_background'))
-          .tabBar(BottomTabBarStyle.of(
-            {
-              normal: new SymbolGlyphModifier($r('sys.symbol.key_fill')),
-              selected: new SymbolGlyphModifier($r('sys.symbol.key_fill'))
-            },
-            $r('app.string.tab_token'))
-            .verticalAlign(VerticalAlign.Center)
-          )
-          .tabIndex(0)
-
-          TabContent() {
-            // [冷启动优化] Setting Tab 懒加载：仅在用户首次切换到"我的"Tab 时构建组件树，
-            // 避免冷启动时一次性构建两个 TabContent 导致首帧 build 耗时增加
-            if (this.settingTabInitialized) {
-              HdsNavigation() {
-                this.SettingEntryCardBuilder()
-              }
-              .mode(NavigationMode.Stack)
-              .bindToScrollable([this.settingEntryScroller])
-              .titleMode(HdsNavigationTitleMode.MINI)
-              .hideBackButton(true)
-              .titleBar({
-                avoidLayoutSafeArea: true,
-                style: {
-                  originalStyle: {
-                    contentStyle: {
-                      titleStyle: {
-                        mainTitleColor: $r('sys.color.font_primary'),
-                      },
-                      menuStyle: {
-                        iconColor: $r('sys.color.icon_primary')
-                      },
-                    },
-                  backgroundStyle: {
-                    maskExtraHeight: 0
-                  }
-                },
-                scrollEffectStyle: {
-                  backgroundStyle: {
-                    maskExtraHeight: 0
-                  }
-                },
-                scrollEffectOpts: {
-                  enableScrollEffect: true,
-                  scrollEffectType: this.currentScrollEffectType
-                },
-                systemMaterialEffect: {
-                  materialType: hdsMaterial.MaterialType.ADAPTIVE,
-                  materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-                }
-              },
-              content: {
-                title: {
-                  mainTitle: $r('app.string.tab_me')
-                },
-                menu: {
-                  value: []
-                }
-              }
-            })
-            }
-          }
-          .backgroundColor($r('app.color.window_background'))
-          .tabBar(BottomTabBarStyle.of(
-            {
-              normal: new SymbolGlyphModifier($r('sys.symbol.person_crop_circle_fill_1')),
-              selected: new SymbolGlyphModifier($r('sys.symbol.person_crop_circle_fill_1')),
-            },
-            $r('app.string.tab_me'))
-            .verticalAlign(VerticalAlign.Center)
-          )
-          .tabIndex(1)
+      .onDragEnter(() => {
+        if (!this.DropFilesDialogIsOpen) {
+          this.DropFilesDialogIsOpen = true;
+          this.DropFilesDialogController?.open();
         }
-        .barBackgroundColor($r('app.color.tab_bar_bg'))
-        .backgroundColor($r('app.color.window_background'))
-        .layoutWeight(1)
-        .barOverlap(true)
-        .barBackgroundColor(Color.Transparent)
-        .barBackgroundBlurStyle(BlurStyle.Regular)
-        .barPosition(BarPosition.End)
-        .barFloatingStyle({
-          barBottomMargin: 28,
-          systemMaterialEffect: {
-            materialType: hdsMaterial.MaterialType.ADAPTIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-          }
-        })
-        .vertical(false)
-        .barMode(BarMode.Fixed)
-        .animationDuration(300)
-        .onChange((index) => {
-          this.tab_bar_index = index;
-          // [冷启动优化] 用户首次切换到 Setting Tab 时触发懒加载构建
-          if (index === 1 && !this.settingTabInitialized) {
-            this.settingTabInitialized = true;
-          }
-        })
-      }
-      }
-    }
-    .width('100%')
-    .height('100%')
-    .allowDrop([uniformTypeDescriptor.UniformDataType.FILE])
-    .onDrop(() => {
-      this.DropFilesDialogIsOpen = false;
-      this.DropFilesDialogController?.close();
-    })
-    .onDragEnter(() => {
-      if (!this.DropFilesDialogIsOpen) {
-        this.DropFilesDialogIsOpen = true;
-        this.DropFilesDialogController?.open();
-      }
-    })
-    .onDragLeave(() => {
-      this.DropFilesDialogIsOpen = false;
-      this.DropFilesDialogController?.close();
-    })
-    .foregroundBlurStyle((this.background_blur_flag || this.isAppLockOverlayVisible) ? BlurStyle.Thin : BlurStyle.NONE, {
-      colorMode: ThemeColorMode.SYSTEM,
-      adaptiveColor: AdaptiveColor.DEFAULT
-    })
+      })
+      .onDragLeave(() => {
+        this.DropFilesDialogIsOpen = false;
+        this.DropFilesDialogController?.close();
+      })
+      .foregroundBlurStyle((this.background_blur_flag || this.isAppLockOverlayVisible) ? BlurStyle.Thin : BlurStyle.NONE, {
+        colorMode: ThemeColorMode.SYSTEM,
+        adaptiveColor: AdaptiveColor.DEFAULT
+      })
     }
     .hideTitleBar(true)
     .mode(NavigationMode.Stack)

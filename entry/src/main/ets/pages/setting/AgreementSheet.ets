@@ -5,7 +5,6 @@ import { throttle } from '../../utils/UiUtils';
 import { ROUTE_NAMES } from '../../utils/AppPreference';
 import { WebPage, WebPageParams } from '../WebPage';
 import { hdsMaterial, HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
-import { CommonConstants } from '../../utils/CommonConstants';
 
 @Preview
 @ComponentV2
@@ -26,9 +25,6 @@ export struct AgreementSheet {
       HdsNavigation(this.pageInfos) {
         Column() {
           List({ scroller: this.sheetScroller, space: 10 }) {
-            ListItem()
-              .height(CommonConstants.AVOID_TOP_BASE_HEIGHT)
-
             ListItem() {
               SettingItem({ title: "" }) {
                 SubItemButton({ symbol: $r("sys.symbol.person_shield"), text: $r('app.string.privacy_statement') })
@@ -55,6 +51,7 @@ export struct AgreementSheet {
             }
             .padding({ left: 10, right: 10 })
           }
+          .clip(false)
           .width('100%')
           .height('100%')
           .scrollBar(BarState.Off)
@@ -74,6 +71,7 @@ export struct AgreementSheet {
       .bindToScrollable([this.sheetScroller])
       .titleMode(HdsNavigationTitleMode.MODAL)
       .titleBar({
+        enableComponentSafeArea: true,
         style: {
           originalStyle: {
             contentStyle: {
@@ -85,14 +83,6 @@ export struct AgreementSheet {
                 iconColor: $r('sys.color.icon_primary')
               }
             },
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
-          },
-          scrollEffectStyle: {
-            backgroundStyle: {
-              maskExtraHeight: 0
-            }
           },
           scrollEffectOpts: {
             enableScrollEffect: true,

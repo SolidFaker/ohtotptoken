@@ -252,14 +252,8 @@ export struct TokenListPage {
               }
             })
           }, (vm: TokenConfigVM) => vm.objid) // keyGenerator: objid 变化 = 组件重建
-
-          ListItem() {
-            Row()
-              .height(this.TabBarVisible ? (80 + this.appBottomAvoidHeight) : (20 + this.appBottomAvoidHeight))
-              .width('100%')
-          }
-          .selectable(false)
         }
+        .contentEndOffset(this.TabBarVisible ? (80 + this.appBottomAvoidHeight) : (20 + this.appBottomAvoidHeight))
         .alignListItem(ListItemAlign.Center)
         .lanes({ minLength: 400, maxLength: this.token_preference.app_appearance_item_max_width })
         .layoutWeight(1)

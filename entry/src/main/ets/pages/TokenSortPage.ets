@@ -51,12 +51,6 @@ export struct TokenSortPage {
     HdsNavDestination() {
       Column() {
         List({ space: this.token_preference.app_appearance_item_space, scroller: this.sortListScroller }) {
-          // 顶部避让区域 — 用 ListItemGroup 确保多 lane 布局中跨整行
-          ListItemGroup() {
-            ListItem()
-              .height(CommonConstants.AVOID_TOP_BASE_HEIGHT + this.window.AvoidTopHeight)
-          }
-
           LazyForEach(this.dataSource, (token: TokenConfig, index: number) => {
             ListItem() {
               TokenItem({
@@ -81,10 +75,12 @@ export struct TokenSortPage {
             })
 
         }
+        .clip(false)
         .alignListItem(ListItemAlign.Center)
         .lanes({ minLength: 400, maxLength: this.token_preference.app_appearance_item_max_width })
         .layoutWeight(1)
         .width('100%')
+        .height('100%')
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         .contentEndOffset(this.window.AvoidBottomHeight)
@@ -96,6 +92,7 @@ export struct TokenSortPage {
     .titleMode(HdsNavDestinationTitleMode.MINI)
     .titleBar({
       avoidLayoutSafeArea: true,
+      enableComponentSafeArea: true,
       style: {
         originalStyle: {
           contentStyle: {
