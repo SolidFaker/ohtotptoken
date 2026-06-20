@@ -28,11 +28,11 @@ export struct WebPage {
           .darkMode(WebDarkMode.Auto)
           .domStorageAccess(true)
           .zoomAccess(true)
-          .fileAccess(true)
           .mixedMode(MixedMode.All)
           .cacheMode(CacheMode.Default)
           .javaScriptAccess(true)
           .width(CommonConstants.FULL_PERCENT)
+          .height(CommonConstants.FULL_PERCENT)
       }
       .width(CommonConstants.FULL_PERCENT)
       .height(CommonConstants.FULL_PERCENT)
@@ -52,14 +52,6 @@ export struct WebPage {
               iconColor: $r('sys.color.icon_primary')
             }
           },
-          backgroundStyle: {
-            maskExtraHeight: 0
-          }
-        },
-        scrollEffectStyle: {
-          backgroundStyle: {
-            maskExtraHeight: 0
-          }
         },
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,
