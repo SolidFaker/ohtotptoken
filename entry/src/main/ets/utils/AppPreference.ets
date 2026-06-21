@@ -325,6 +325,8 @@ export enum ROUTE_NAMES {
   TokenCardConfigPage = 'TokenCardConfigPage',
   /** Token排序页面 */
   TokenSortPage = 'TokenSortPage',
+  /** Token搜索页面 */
+  TokenSearchPage = 'TokenSearchPage',
   /** App首页 */
   IndexPage = 'pages/Index',
 }

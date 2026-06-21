@@ -12,6 +12,7 @@ import lazy { FeedbackSheet } from '../pages/setting/FeedbackSheet'
 // [冷启动优化] NavDestination 子页面：仅在用户导航时触发评估
 import lazy { TokenCardConfigPage } from './TokenCardConfigPage'
 import lazy { TokenSortPage } from './TokenSortPage'
+import lazy { TokenSearchPage } from './TokenSearchPage'
 import { util, url } from '@kit.ArkTS';
 // [冷启动优化] 文件 I/O 仅在 deferredInit 中使用
 import lazy { fileIo as fs } from '@kit.CoreFileKit';
@@ -1357,6 +1358,8 @@ struct Index {
       TokenCardConfigPage()
     } else if (name === ROUTE_NAMES.TokenSortPage) {
       TokenSortPage({ scrollEffectType: this.currentScrollEffectType })
+    } else if (name === ROUTE_NAMES.TokenSearchPage) {
+      TokenSearchPage({ scrollEffectType: this.currentScrollEffectType })
     }
   }
 
@@ -1464,7 +1467,7 @@ struct Index {
                             icon: $r('sys.symbol.magnifyingglass'),
                             isEnabled: true,
                             action: () => {
-                              if (this.appCtx.eventHub != undefined) this.appCtx.eventHub.emit(EVENT_NAMES.TOGGLE_TOKEN_SEARCH);
+                              this.pageInfos.pushPathByName(ROUTE_NAMES.TokenSearchPage, null);
                             }
                           }
                         },

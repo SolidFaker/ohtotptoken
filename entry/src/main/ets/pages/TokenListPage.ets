@@ -7,7 +7,7 @@ import { AppPreference, TokenPreference, EVENT_NAMES, PREF_KEYS } from "../utils
 import { otpType, TokenConfig, TokenConfigVM } from "../utils/TokenConfig";
 import { TokenStore } from "../utils/TokenStore";
 import { convertToken2URI } from "../utils/TokenUtils";
-import { AppStorageV2, curves, window } from "@kit.ArkUI";
+import { AppStorageV2, window } from "@kit.ArkUI";
 import { AppWindowInfo } from "../entryability/EntryAbility";
 import { GenericDataSource } from "../utils/GenericDataSource";
 import { showSnackBar, SnackBarNotifyType } from "../utils/HdsSnackBarUtils";
@@ -46,34 +46,12 @@ export struct TokenListPage {
     this.dataSource.updateData(toVMs(monitor.value()?.now as TokenConfig[]));
   }
 
-  @Local token_list_search_result: TokenConfigVM[] = [];
-  @Local token_list_search_visible: boolean = false;
-  @Local token_list_search_enable: boolean = false;
-  @Local token_list_search_str: string = '';
-  @Local id_list: string[] = ['search_bar', 'search_blur_anchor'];
-
   private dialog_totp_config?: CustomDialogController;
   private dialog_forti_config?: CustomDialogController;
   private dialog_steam_config?: CustomDialogController;
   private dialog_qrcode?: CustomDialogController;
   private appCtx: common.UIAbilityContext = AppStorage.get('appContext') as common.UIAbilityContext;
-  private toggleSearchHandler: () => void = () => {};
   private onSingleTokenUpdatedHandler: (token: TokenConfig) => void = () => {};
-
-  async filterCurrentTokens(filter_word: string): Promise<void> {
-    if (filter_word.length === 0) {
-      this.token_list_search_enable = false;
-      this.dataSource.updateData(toVMs(this.Tokens));
-      return;
-    }
-    this.token_list_search_enable = true;
-    const lower_filter_word = filter_word.toLowerCase();
-    const filtered = this.Tokens.filter((token) => {
-      return token.TokenIssuer.toLowerCase().indexOf(lower_filter_word) >= 0 || token.TokenName.toLowerCase().indexOf(lower_filter_word) >= 0
-    });
-    this.token_list_search_result = toVMs(filtered);
-    this.dataSource.updateData(this.token_list_search_result);
-  }
 
   aboutToAppear(): void {
     this.dataSource = new GenericDataSource(toVMs(this.Tokens));
@@ -84,34 +62,8 @@ export struct TokenListPage {
     this.appCtx.eventHub?.on(EVENT_NAMES.TOKEN_SINGLE_UPDATED, this.onSingleTokenUpdatedHandler);
   }
 
-  onDidBuild(): void {
-    this.toggleSearchHandler = () => { this.toggleTokenSearchByTitleBar() };
-    this.appCtx.eventHub?.on(EVENT_NAMES.TOGGLE_TOKEN_SEARCH, this.toggleSearchHandler);
-  }
-
   aboutToDisappear(): void {
-    this.appCtx.eventHub?.off(EVENT_NAMES.TOGGLE_TOKEN_SEARCH, this.toggleSearchHandler);
     this.appCtx.eventHub?.off(EVENT_NAMES.TOKEN_SINGLE_UPDATED, this.onSingleTokenUpdatedHandler);
-  }
-
-  private toggleTokenSearchByTitleBar(): void {
-    const nextVisible = !this.token_list_search_visible;
-    this.window.uiContext?.animateTo({ duration: 250, curve: curves.springMotion() }, () => {
-      this.token_list_search_visible = nextVisible;
-      if (!this.token_list_search_visible) {
-        this.token_list_search_str = '';
-        this.token_list_search_enable = false;
-      }
-    })
-    if (nextVisible) {
-      setTimeout(() => {
-        focusControl.requestFocus(this.id_list[0])
-      }, 180)
-    } else {
-      setTimeout(() => {
-        focusControl.requestFocus(this.id_list[1])
-      }, 100)
-    }
   }
 
   private async updateSingleToken(conf: TokenConfig, toast: boolean): Promise<boolean> {
@@ -148,17 +100,9 @@ export struct TokenListPage {
 
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
-      Button('')
-        .id(this.id_list[1])
-        .focusable(true)
-        .width(1)
-        .height(1)
-        .opacity(0)
-        .position({ x: 0, y: 0 })
       if (this.Tokens.length === 0) {
         Row() {
-          Text(this.token_list_search_enable ? $r('app.string.app_token_list_search_msg') :
-          $r('app.string.app_guide_msg'))
+          Text($r('app.string.app_guide_msg'))
             .textAlign(TextAlign.Center)
             .fontSize(20)
             .width('100%')
@@ -170,43 +114,6 @@ export struct TokenListPage {
       }
       Column() {
         List({ space: this.token_preference.app_appearance_item_space, initialIndex: 0, scroller: this.listScroller }) {
-          ListItemGroup() {
-            ListItem() {
-              Column() {
-                Stack({ alignContent: Alignment.End }) {
-                  TextInput({
-                    placeholder: $r('app.string.token_search_placeholder'),
-                    text: this.token_list_search_str
-                  })
-                    .id(this.id_list[0])
-                    .onChange((value) => {
-                      this.token_list_search_str = value;
-                      this.filterCurrentTokens(this.token_list_search_str);
-                    })
-                    .onSubmit(() => {
-                      this.filterCurrentTokens(this.token_list_search_str);
-                    })
-                  SymbolGlyph($r('sys.symbol.xmark'))
-                    .fontSize(20)
-                    .fontWeight(FontWeight.Medium)
-                    .fontColor([$r('app.color.item_fg')])
-                    .padding({ right: 10 })
-                    .onClick(() => {
-                      this.toggleTokenSearchByTitleBar();
-                    })
-                }
-                .padding({ left: 10, right: 10, top: this.token_list_search_visible || this.token_list_search_enable ? 10 : 0 })
-                .width('100%')
-                .height(this.token_list_search_visible || this.token_list_search_enable ? 56 : 0)
-                .opacity(this.token_list_search_visible || this.token_list_search_enable ? 1 : 0)
-                .translate({
-                  x: 0,
-                  y: this.token_list_search_visible || this.token_list_search_enable ? 0 : -12
-                })
-              }
-            }
-          }
-
           // key = vm.objid：变更 objid 后 LazyForEach 视为"新数据"，销毁旧组件并创建新实例
           LazyForEach(this.dataSource, (vm: TokenConfigVM) => {
             ListItem() {

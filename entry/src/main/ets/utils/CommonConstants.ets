@@ -49,6 +49,7 @@ export class CommonConstants {
 
   // Height and width
   static readonly AVOID_TOP_BASE_HEIGHT: number = 56;
+  static readonly AVOID_TOP_WITH_SEARCHBAR_HEIGHT: number = 120;
   static readonly SETTING_OPTION_CARD_HEIGHT: number = 50;
 
   // Swiper duration
