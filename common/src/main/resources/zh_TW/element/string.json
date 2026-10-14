@@ -1,5 +1,30 @@
 {
   "string": [
+    { "name": "local_backup_plain_warning", "value": "取得這份未加密檔案的人可以讀取權杖金鑰並產生驗證碼。請勿分享檔案，並將其保存在安全位置。" },
+    { "name": "local_backup_migration_warning", "value": "此文字由未加密的 OTP URI 構成，包含權杖金鑰。它用於移轉到相容的驗證器，不是完整備份，不包含完整群組和應用程式設定。接收方可能不支援部分權杖功能，不能保證無損匯入。" },
+    { "name": "local_backup_export_anyway", "value": "仍然匯出" },
+    { "name": "local_backup_password_notice", "value": "還原這份備份必須使用原密碼，應用程式無法找回密碼。請妥善保管。" },
+    { "name": "local_backup_password_original", "value": "請輸入備份的原密碼。舊格式檔案在解密與驗證成功前僅為候選，尚不能確認有效。" },
+    { "name": "local_backup_password_failed", "value": "密碼錯誤或備份檔案損壞，請重試或取消。" },
+    { "name": "local_backup_processing", "value": "正在處理備份，請稍候…" },
+    { "name": "local_backup_saving", "value": "正在儲存檔案…" },
+    { "name": "local_backup_saved", "value": "檔案已儲存。雲端硬碟上傳狀態由檔案提供方管理。" },
+    { "name": "local_backup_prepare_failed", "value": "無法準備備份，請重試。" },
+    { "name": "local_backup_picker_failed", "value": "無法選擇檔案或儲存位置，請重試。" },
+    { "name": "local_backup_read_failed", "value": "檔案讀取未完成，請檢查存取權限後重試。" },
+    { "name": "local_backup_save_incomplete", "value": "儲存未完成，目標檔案可能不完整。請檢查後重試；應用程式未自動刪除檔案，也未還原被覆寫的原檔案。" },
+    { "name": "local_backup_unsupported", "value": "此入口不支援該檔案，或備份內容無效。請選擇本應用程式原始備份；無版本標識的舊密碼備份需保留 .bak 副檔名。" },
+    { "name": "local_backup_migration_title", "value": "選中了移轉檔案" },
+    { "name": "local_backup_migration_redirect", "value": "此檔案包含 OTP URI，不是完整備份。請前往 URI 匯入並在該處重新選擇檔案。目前尚未匯入任何內容，也不會自動轉交檔案內文。" },
+    { "name": "local_backup_open_uri", "value": "前往 URI 匯入" },
+    { "name": "local_backup_summary_title", "value": "確認匯入備份" },
+    { "name": "local_backup_summary_plain", "value": "%d 個唯一權杖，%d 個可合併群組。保護方式：不加密。\n\n不會清空現有權杖；相同權杖標識的內容會更新，既有收藏和排序保留。群組按標識合併，同標識保留本機記錄。" },
+    { "name": "local_backup_summary_encrypted", "value": "%d 個唯一權杖，%d 個可合併群組。保護方式：密碼加密。\n\n不會清空現有權杖；相同權杖標識的內容會更新，既有收藏和排序保留。群組按標識合併，同標識保留本機記錄。" },
+    { "name": "local_backup_import_confirm", "value": "匯入這些權杖" },
+    { "name": "local_backup_import_incomplete", "value": "匯入未完成，部分群組或權杖可能已更新。請檢查後重試；應用程式未自動復原這些變更。" },
+    { "name": "local_backup_export_description", "value": "儲存本應用程式備份，可選擇密碼加密或不加密" },
+    { "name": "local_backup_import_description", "value": "讀取本應用程式備份，查看摘要後再確認匯入" },
+    { "name": "local_backup_migration_description", "value": "匯出未加密的 OTP URI 供相容驗證器移轉，不是完整備份" },
     { "name": "token_batch_import_title", "value": "正在匯入權杖" },
     { "name": "token_batch_delete_title", "value": "正在刪除權杖" },
     { "name": "token_batch_favorite_title", "value": "正在更新收藏" },
@@ -812,11 +837,11 @@
     },
     {
       "name": "cloud_sync_clear_storage_success",
-      "value": "雲端備份已清空"
+      "value": "備份刪除已提交，雲端同步尚未完成"
     },
     {
       "name": "cloud_sync_clear_storage_failed",
-      "value": "部分備份清理失敗，請檢查網路後重試"
+      "value": "部分備份未能清理，請按原範圍重試；尚未確認雲端完成。"
     },
     {
       "name": "cloud_backup_unknown_device",
@@ -868,7 +893,7 @@
     },
     {
       "name": "cloud_backup_restore_confirm_msg",
-      "value": "確定恢復 %s 的備份？目前資料將被替換。"
+      "value": "確定恢復 %s 的備份？令牌將匯入本機儲存，已有的相符令牌可能被更新。"
     },
     {
       "name": "cloud_backup_restore_success",
@@ -884,11 +909,11 @@
     },
     {
       "name": "cloud_backup_delete_confirm_msg",
-      "value": "確定刪除 %s 的備份？此操作不可撤銷。"
+      "value": "確定刪除 %s 的備份？本次僅刪除目前帳號中選取的這一份備份，不會刪除本機令牌或其他備份。此操作無法復原。"
     },
     {
       "name": "cloud_backup_delete_success",
-      "value": "備份刪除成功"
+      "value": "備份刪除已提交，雲端同步尚未完成"
     },
     {
       "name": "cloud_backup_delete_failed",
@@ -912,7 +937,7 @@
     },
     {
       "name": "cloud_backup_manual_des",
-      "value": "將當前所有令牌備份至華為雲"
+      "value": "建立加密的本機備份並提交雲端同步，遠端不會立即完成。"
     },
     {
       "name": "data_dev_info",
@@ -2012,15 +2037,15 @@
     },
     {
       "name": "cloud_sync_clear_device_confirm_msg",
-      "value": "此操作將從華為雲永久刪除本裝置的所有備份資料，此操作不可撤銷。確定要繼續嗎？"
+      "value": "確定刪除目前帳號中已確認屬於本次安裝的備份？歸屬無法確認的項目將保留，不會刪除本機令牌。此操作無法復原。"
     },
     {
       "name": "cloud_sync_clear_device_name_confirm_msg",
-      "value": "此操作將從華為雲永久刪除同名裝置（如解除安裝重灌前遺留）的舊備份資料，此操作不可撤銷。確定要繼續嗎？"
+      "value": "確定刪除已確認來自同名裝置、但安裝身分不同的舊備份？範圍僅限目前帳號，歸屬無法確認的項目將保留，不會刪除本機令牌。此操作無法復原。"
     },
     {
       "name": "cloud_sync_clear_all_confirm_msg",
-      "value": "此操作將從華為雲永久刪除所有裝置的所有備份資料，此操作不可撤銷。確定要繼續嗎？"
+      "value": "確定刪除本應用程式在目前帳號中的全部備份，包括其他裝置與來源不明的備份？變更會同步至其他裝置，不會刪除本機令牌。此操作無法復原。"
     },
     {
       "name": "cloud_backup_login_required",
@@ -2293,6 +2318,398 @@
     {
       "name": "watch_sync_no_device_hint",
       "value": "未檢測到已連接設備，請確認手機與手錶已在華為運動健康中配對連接"
+    },
+    {
+      "name": "cloud_backup_detail_title",
+      "value": "備份詳情"
+    },
+    {
+      "name": "cloud_backup_detail_metadata",
+      "value": "備份資訊"
+    },
+    {
+      "name": "cloud_backup_detail_date",
+      "value": "備份時間"
+    },
+    {
+      "name": "cloud_backup_detail_source",
+      "value": "來源"
+    },
+    {
+      "name": "cloud_backup_detail_device",
+      "value": "裝置名稱"
+    },
+    {
+      "name": "cloud_backup_detail_content",
+      "value": "中繼資料狀態"
+    },
+    {
+      "name": "cloud_backup_detail_location",
+      "value": "副本位置"
+    },
+    {
+      "name": "cloud_backup_detail_size",
+      "value": "記錄的大小"
+    },
+    {
+      "name": "cloud_backup_detail_privacy_hint",
+      "value": "僅顯示已有中繼資料。開啟詳情不會解密令牌或顯示密鑰。副本位置不能證明本次雲端變更已完成。"
+    },
+    {
+      "name": "cloud_backup_view_details",
+      "value": "查看詳情"
+    },
+    {
+      "name": "cloud_backup_source_other",
+      "value": "其他裝置"
+    },
+    {
+      "name": "cloud_backup_source_unknown",
+      "value": "來源未確認"
+    },
+    {
+      "name": "cloud_backup_name_missing",
+      "value": "裝置名稱無法取得"
+    },
+    {
+      "name": "cloud_backup_metadata_valid",
+      "value": "中繼資料可讀取"
+    },
+    {
+      "name": "cloud_backup_metadata_pending",
+      "value": "內容尚未在本機可用"
+    },
+    {
+      "name": "cloud_backup_metadata_read_failed",
+      "value": "內容暫時無法讀取，請稍後重試"
+    },
+    {
+      "name": "cloud_backup_metadata_invalid",
+      "value": "備份損壞或格式不受支援，無法恢復"
+    },
+    {
+      "name": "cloud_backup_metadata_unknown",
+      "value": "中繼資料尚未確認"
+    },
+    {
+      "name": "cloud_backup_count_unknown",
+      "value": "令牌數量未知"
+    },
+    {
+      "name": "cloud_backup_value_unknown",
+      "value": "未知"
+    },
+    {
+      "name": "cloud_backup_location_local",
+      "value": "僅本機副本，雲端同步未確認"
+    },
+    {
+      "name": "cloud_backup_location_both",
+      "value": "本機與雲端均有副本"
+    },
+    {
+      "name": "cloud_backup_location_unknown",
+      "value": "副本位置未知"
+    },
+    {
+      "name": "cloud_backup_location_hint",
+      "value": "副本位置僅說明內容可用的位置，不代表本次上傳或刪除已完成同步。"
+    },
+    {
+      "name": "cloud_backup_refresh",
+      "value": "重新載入備份資訊"
+    },
+    {
+      "name": "cloud_backup_restore_requires_metadata",
+      "value": "恢復需要可讀取的中繼資料。內容暫時無法取得時可重新載入；損壞或格式不受支援的備份無法恢復。"
+    },
+    {
+      "name": "cloud_backup_danger_zone",
+      "value": "刪除備份"
+    },
+    {
+      "name": "cloud_backup_delete_local_unaffected",
+      "value": "刪除雲端備份不會刪除本機令牌。雲端刪除操作無法復原。"
+    },
+    {
+      "name": "cloud_backup_delete_other_confirm",
+      "value": "確定刪除 %s 的備份？此備份來自其他裝置。本次僅刪除目前帳號中的這一份備份，變更會同步至其他裝置，不會刪除本機令牌。此操作無法復原。"
+    },
+    {
+      "name": "cloud_backup_delete_unknown_confirm",
+      "value": "確定刪除 %s 的備份？此備份的來源無法確認。本次僅刪除目前帳號中選取的這一份備份，不會刪除本機令牌或其他備份。此操作無法復原。"
+    },
+    {
+      "name": "cloud_backup_operation_running",
+      "value": "正在處理備份操作…"
+    },
+    {
+      "name": "cloud_backup_operation_busy",
+      "value": "另一項備份操作仍在進行，請等待結束後重試。"
+    },
+    {
+      "name": "cloud_backup_cleanup_pending",
+      "value": "尚未確認上一項工作已停止，衝突的備份操作已暫停。請重試停止原工作；此操作不會建立新備份或執行新的刪除。"
+    },
+    {
+      "name": "cloud_backup_retry_cleanup",
+      "value": "重試停止上一項工作"
+    },
+    {
+      "name": "cloud_backup_cleanup_ready",
+      "value": "已確認上一項工作停止，可以重新選擇操作。"
+    },
+    {
+      "name": "cloud_backup_retry_sync",
+      "value": "重試提交同步"
+    },
+    {
+      "name": "cloud_backup_history_load_failed",
+      "value": "無法載入備份歷史，已保留原有清單，請重試。"
+    },
+    {
+      "name": "cloud_backup_not_ready",
+      "value": "雲端儲存尚未就緒，請稍後重試。"
+    },
+    {
+      "name": "cloud_backup_identity_unavailable",
+      "value": "無法取得本裝置的備份身分，未發佈新備份，請稍後重試。"
+    },
+    {
+      "name": "cloud_backup_invalid_target",
+      "value": "此備份已不是有效目標，請重新載入歷史並選擇。"
+    },
+    {
+      "name": "cloud_backup_read_failed",
+      "value": "無法讀取備份內容，請稍後重試。"
+    },
+    {
+      "name": "cloud_backup_decrypt_failed",
+      "value": "無法解密備份，請確認帳號並重試。"
+    },
+    {
+      "name": "cloud_backup_write_failed",
+      "value": "備份寫入或發佈失敗，未確認新的完整備份，已有備份仍保留。"
+    },
+    {
+      "name": "cloud_backup_icon_failed",
+      "value": "圖示包操作失敗，請重試原操作；不能視為所有資料均已處理。"
+    },
+    {
+      "name": "cloud_backup_partial_failure",
+      "value": "僅部分操作完成，仍有失敗或歸屬無法確認的項目。請按原範圍重試，歸屬不明的項目已保留。"
+    },
+    {
+      "name": "cloud_backup_partial_sync_failed",
+      "value": "僅部分操作完成，且同步未能提交。請重試提交同步，再按原操作範圍重試剩餘項目。"
+    },
+    {
+      "name": "cloud_backup_sync_submit_failed",
+      "value": "雲端同步未能提交，遠端完成狀態未確認，請重試。"
+    },
+    {
+      "name": "cloud_backup_local_done_sync_failed",
+      "value": "本機檔案操作已完成，但雲端同步未能提交。請重試提交同步；尚未確認雲端完成。"
+    },
+    {
+      "name": "cloud_backup_sync_pending",
+      "value": "同步已提交，尚未確認本次雲端變更完成。"
+    },
+    {
+      "name": "cloud_backup_created_locally",
+      "value": "備份已在本機建立，雲端同步仍待確認。"
+    },
+    {
+      "name": "cloud_backup_create_failed",
+      "value": "備份建立失敗，未確認新的成功備份，請重試。"
+    },
+    {
+      "name": "cloud_backup_last_time_hint",
+      "value": "此時間表示最近一次本機備份建立，不代表上傳已完成。"
+    },
+    {
+      "name": "cloud_backup_global_sync_state",
+      "value": "全域雲端同步狀態"
+    },
+    {
+      "name": "cloud_backup_global_sync_idle",
+      "value": "未回報正在進行的傳輸"
+    },
+    {
+      "name": "cloud_backup_global_sync_hint",
+      "value": "系統全域狀態不能證明本次備份或刪除已完成，已提交的變更仍可能等待同步。"
+    },
+    {
+      "name": "cloud_backup_unknown_error",
+      "value": "未識別的同步錯誤，請稍後重試"
+    },
+    {
+      "name": "cloud_backup_icon_summary",
+      "value": "%d 個圖示包 · %s（記錄的中繼資料）"
+    },
+    {
+      "name": "cloud_backup_settings_failed",
+      "value": "無法開啟華為雲空間設定，請從系統設定手動進入。"
+    },
+    {
+      "name": "cloud_diagnostics_title",
+      "value": "雲端備份診斷"
+    },
+    {
+      "name": "cloud_diagnostics_session",
+      "value": "本次啟動暫時開啟（最長10分鐘）"
+    },
+    {
+      "name": "cloud_diagnostics_description",
+      "value": "預設關閉，不儲存為偏好。僅記錄經白名單篩選的技術狀態，不記錄備份內容、憑證、裝置身分或檔案路徑，不上傳任何資料。關閉、10分鐘到期或應用程式重新啟動後停止詳細記錄。關閉時仍可能輸出經隱私篩選的限頻失敗摘要。關閉不會清除已進入系統日誌的記錄。"
+    },
+    {
+      "name": "cloud_diagnostics_unavailable",
+      "value": "無法開啟暫時診斷，備份功能不受影響。"
+    },
+    {
+      "name": "developer_test_tokens_failed",
+      "value": "測試令牌操作失敗，請重試。"
+    },
+    {
+      "name": "cloud_backup_last_failure_title",
+      "value": "最近一次備份"
+    },
+    {
+      "name": "cloud_backup_last_failure_feedback",
+      "value": "備份失敗，請回報開發者"
+    },
+    {
+      "name": "cloud_backup_last_failure_feedback_entry",
+      "value": "前往問題回饋"
+    },
+    {
+      "name": "cloud_backup_failure_stage_unknown",
+      "value": "未知階段"
+    },
+    {
+      "name": "cloud_backup_failure_stage_device_info",
+      "value": "設備身分讀取"
+    },
+    {
+      "name": "cloud_backup_failure_stage_encrypt",
+      "value": "備份加密"
+    },
+    {
+      "name": "cloud_backup_failure_stage_write",
+      "value": "備份寫入"
+    },
+    {
+      "name": "cloud_backup_failure_stage_staged_verify",
+      "value": "暫存內容校驗"
+    },
+    {
+      "name": "cloud_backup_failure_stage_publish",
+      "value": "備份發布"
+    },
+    {
+      "name": "cloud_backup_failure_stage_post_verify",
+      "value": "發布後校驗"
+    },
+    {
+      "name": "cloud_backup_failure_stage_rotate",
+      "value": "輪換剪除"
+    },
+    {
+      "name": "cloud_backup_failure_stage_icon",
+      "value": "圖示包備份"
+    },
+    {
+      "name": "cloud_backup_failure_stage_sync",
+      "value": "同步提交"
+    },
+    {
+      "name": "cloud_backup_failure_reason_post_verify",
+      "value": "發布後校驗未通過，備份暫不可用"
+    },
+    {
+      "name": "cloud_backup_clear_result_deleted",
+      "value": "已清理 %d 份雲端備份"
+    },
+    {
+      "name": "cloud_backup_clear_result_skipped",
+      "value": "另有 %d 條無法確認歸屬的雲端記錄已保留"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_hint",
+      "value": "以下記錄無法確認來源設備，不參與任何設備的輪換保留策略。"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_entry",
+      "value": "清除來源未確認的記錄"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_confirm",
+      "value": "將逐條刪除 %d 條來源未確認的雲端備份記錄，刪除失敗的項目會保留。本地令牌不受影響。"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_done",
+      "value": "已刪除 %d 條記錄，%d 條刪除失敗已保留"
+    },
+    {
+      "name": "cloud_backup_failure_stage_snapshot",
+      "value": "權杖快照讀取"
+    },
+    {
+      "name": "icon_pack_import_reject_not_zip",
+      "value": "不是有效的 ZIP 壓縮包，或檔案已損壞"
+    },
+    {
+      "name": "icon_pack_import_reject_too_large",
+      "value": "圖標包超出大小限制"
+    },
+    {
+      "name": "icon_pack_import_reject_missing_meta",
+      "value": "缺少 pack.json，不是 Aegis 圖標包"
+    },
+    {
+      "name": "icon_pack_import_reject_entry_overflow",
+      "value": "圖標包檔案數量超出限制"
+    },
+    {
+      "name": "icon_pack_import_reject_file_too_large",
+      "value": "圖標包含有超過大小限制的檔案"
+    },
+    {
+      "name": "icon_pack_import_reject_unsafe_path",
+      "value": "圖標包含有不安全的檔案路徑"
+    },
+    {
+      "name": "icon_pack_import_reject_io",
+      "value": "讀取圖標包失敗"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_sync_failed",
+      "value": "已刪除 %d 條記錄，%d 條刪除失敗已保留，同步提交被拒絕"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_sync_pending",
+      "value": "已刪除 %d 條記錄，%d 條刪除失敗已保留，同步等待完成"
+    },
+    {
+      "name": "cloud_backup_feedback_back",
+      "value": "返回"
+    },
+    {
+      "name": "icon_pack_import_reject_invalid_meta",
+      "value": "pack.json 無法解析"
+    },
+    {
+      "name": "icon_pack_import_reject_duplicate",
+      "value": "已安裝同名同版本的圖標包"
+    },
+    {
+      "name": "cloud_sync_icon_pack_publication_unresolved",
+      "value": "發佈狀態未定，請重試；持續失敗時可清除雲端備份"
+    },
+    {
+      "name": "icon_pack_rematch_failed",
+      "value": "重新配對圖示失敗"
     }
   ]
 }

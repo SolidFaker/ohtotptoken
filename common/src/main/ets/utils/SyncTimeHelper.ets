@@ -7,11 +7,9 @@
  * parseStoredTimestamp() 同时兼容旧版日期字符串格式（如 "2026-04-23 14:30"），
  * 首次读取时自动向上兼容。
  */
-import { hilog } from '@kit.PerformanceAnalysisKit';
 import { padZero } from './CommonUtils';
-
-const TAG = 'SyncTimeHelper';
-const DOMAIN = 0xFF00;
+import { CloudBackupDiagnostics, DiagnosticKind, DiagnosticStage, DiagnosticResult, DiagnosticReason,
+  DiagnosticErrorDomain } from './CloudBackupDiagnostics';
 
 export class SyncTimeHelper {
   /** 将 unix 毫秒时间戳转为 "YYYY-MM-DD HH:mm" 格式字符串，ts <= 0 返回空串 */
@@ -87,8 +85,11 @@ export class SyncTimeHelper {
         );
         return d.getTime();
       }
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, `parseStoredTimestamp: failed: ${(e as Error).message}`);
+    } catch (_) {
+      const diagnostic = CloudBackupDiagnostics.begin(DiagnosticKind.SYNC);
+      CloudBackupDiagnostics.mark(diagnostic, DiagnosticStage.TIME_PARSE, DiagnosticResult.FAIL,
+        { reason: DiagnosticReason.INVALID_FORMAT, errorDomain: DiagnosticErrorDomain.APP });
+      CloudBackupDiagnostics.end(diagnostic);
     }
     return 0;
   }

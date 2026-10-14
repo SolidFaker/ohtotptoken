@@ -1,8 +1,7 @@
 import { dialogSystemMaterial } from 'common';
 import { AppStorageV2 } from '@kit.ArkUI';
-import { BusinessError } from '@kit.BasicServicesKit';
-import { hdsMaterial, HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
-import { AppPreference, AppWindowInfo, PREF_KEYS, showSnackBar, SnackBarNotifyType } from 'common';
+import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
+import { AppPreference, AppWindowInfo, CloudBackupDiagnostics, PREF_KEYS, showSnackBar, SnackBarNotifyType } from 'common';
 import { MaterialTheme } from '../../components/MaterialTheme';
 import { SettingItem } from '../../components/SettingItem';
 import { SubItemButton } from '../../components/SubItemButton';
@@ -19,7 +18,41 @@ export struct DeveloperOptionsSheet {
   @Event removeTestTokens: () => Promise<boolean> = async () => false;
   @Local window: AppWindowInfo = AppStorageV2.connect(AppWindowInfo) as AppWindowInfo;
 
+  @Local cloudDiagnosticsEnabled: boolean = false;
   private sheetScroller: Scroller = new Scroller();
+  private diagnosticsPollTimer: number = -1;
+
+  aboutToAppear(): void {
+    this.cloudDiagnosticsEnabled = CloudBackupDiagnostics.isEnabled();
+    // 实际到期判断由服务的单调时钟负责；轮询只更新开关，绝不延长会话。
+    this.diagnosticsPollTimer = setInterval(() => {
+      this.cloudDiagnosticsEnabled = CloudBackupDiagnostics.isEnabled();
+    }, 1000) as number;
+  }
+
+  aboutToDisappear(): void {
+    if (this.diagnosticsPollTimer >= 0) {
+      clearInterval(this.diagnosticsPollTimer);
+      this.diagnosticsPollTimer = -1;
+    }
+  }
+
+  private changeCloudDiagnostics(isOn: boolean): void {
+    // 状态回显不能重新开启或延长已有会话。
+    if (isOn === CloudBackupDiagnostics.isEnabled()) {
+      this.cloudDiagnosticsEnabled = isOn;
+      return;
+    }
+    if (isOn) {
+      this.cloudDiagnosticsEnabled = CloudBackupDiagnostics.enable();
+      if (!this.cloudDiagnosticsEnabled) {
+        showSnackBar($r('app.string.cloud_diagnostics_unavailable'), SnackBarNotifyType.WARNING);
+      }
+    } else {
+      CloudBackupDiagnostics.disable();
+      this.cloudDiagnosticsEnabled = false;
+    }
+  }
 
   private showAddTestTokensConfirmDialog(): void {
     this.getUIContext().showAlertDialog({
@@ -34,8 +67,8 @@ export struct DeveloperOptionsSheet {
         {
           value: $r('app.string.dialog_btn_confirm'),
           action: () => {
-            this.addTestTokens().catch((reason: BusinessError) => {
-              showSnackBar(reason.message, SnackBarNotifyType.ERROR);
+            this.addTestTokens().catch(() => {
+              showSnackBar($r('app.string.developer_test_tokens_failed'), SnackBarNotifyType.ERROR);
             });
           }
         },
@@ -61,8 +94,8 @@ export struct DeveloperOptionsSheet {
         {
           value: $r('app.string.dialog_btn_confirm'),
           action: () => {
-            this.removeTestTokens().catch((reason: BusinessError) => {
-              showSnackBar(reason.message, SnackBarNotifyType.ERROR);
+            this.removeTestTokens().catch(() => {
+              showSnackBar($r('app.string.developer_test_tokens_failed'), SnackBarNotifyType.ERROR);
             });
           }
         },
@@ -91,6 +124,27 @@ export struct DeveloperOptionsSheet {
                   this.debugModeChanged(isOn);
                 }
               })
+            }
+          }
+          .padding({ left: SETTING_PAGE_INSET, right: SETTING_PAGE_INSET })
+
+          ListItem() {
+            SettingItem({ title: $r('app.string.cloud_diagnostics_title') }) {
+              Row({ space: 12 }) {
+                Text($r('app.string.cloud_diagnostics_session'))
+                  .fontSize($r('sys.float.ohos_id_text_size_body1'))
+                  .fontColor($r('sys.color.font_primary'))
+                  .layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.cloudDiagnosticsEnabled })
+                  .responseRegion({ x: -6, y: -14, width: 48, height: 48 })
+                  .systemMaterial(MaterialTheme.systemMaterial(true))
+                  .onChange((isOn: boolean) => this.changeCloudDiagnostics(isOn))
+              }
+              .width('100%').padding(16).constraintSize({ minHeight: 56 })
+              Text($r('app.string.cloud_diagnostics_description'))
+                .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                .fontColor($r('sys.color.font_secondary'))
+                .width('100%').padding({ left: 16, right: 16, bottom: 16 })
             }
           }
           .padding({ left: SETTING_PAGE_INSET, right: SETTING_PAGE_INSET })
@@ -157,7 +211,7 @@ export struct DeveloperOptionsSheet {
           },
           systemMaterialEffect: {
             materialType: MaterialTheme.hdsMaterialType(),
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+            materialLevel: MaterialTheme.hdsMaterialLevel()
           }
         },
         content: {

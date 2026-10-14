@@ -1,146 +1,134 @@
-/**
- * CloudSyncTask — 云端备份初始同步的 TaskPool 并发任务
- *
- * 此文件定义 @Concurrent 函数，供 taskpool.execute() 在后台线程执行，
- * 避免 I/O 密集操作（目录检查、文件列表）阻塞 UI 主线程。
- *
- * 函数说明：
- * - checkCloudBackupRecords: 确保云端目录存在，统计备份文件数量并返回
- * - loadBackupHistoryRecords: 读取所有备份文件并解析 header 元数据，返回完整备份记录列表
- */
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
 import { buffer, util } from '@kit.ArkTS';
-import { CloudBackupRecord, CloudBackupTokenHeader } from './CloudBackupCrypto';
-import { formatRecordDate, isBackupFileName, parseBackupTimestamp } from './CommonUtils';
+import {
+  CloudBackupRecord, CloudBackupMetadataStatus, CloudBackupIdentityStatus,
+} from './CloudBackupCrypto';
+import { isBackupBase64, parseCloudBackupHeaderJson } from './CloudBackupMetadata';
+import {
+  DiagnosticContext, DiagnosticSummary, DiagnosticStage, DiagnosticResult, DiagnosticReason, DiagnosticErrorDomain,
+  appendDiagnosticSummary,
+} from './CloudBackupDiagnostics';
+import { formatRecordDate, parseBackupTimestamp } from './CommonUtils';
+import { fileIoDiagnosticCode } from './StoragePorts';
 
+export interface CloudBackupTaskHistory {
+  records: CloudBackupRecord[];
+  diagnostics: DiagnosticSummary[];
+  complete: boolean;
+}
 
-
-/**
- * 在 TaskPool 后台线程中检查云端备份记录数量。
- * 1. 检查云端目录是否存在，不存在则创建
- * 2. 遍历目录文件，统计匹配 otp_backup_*.enc 模式的文件数
- * @param cloudDir 云端目录路径（由主线程传入，避免在子线程访问 AppStorage）
- * @returns 备份文件数量
- */
 @Concurrent
 export async function checkCloudBackupRecords(cloudDir: string): Promise<number> {
-  let recordCount: number = 0;
-  const TAG = 'CloudSyncTask';
-  const DOMAIN = 0xFF00;
   try {
-    try {
-      await fs.stat(cloudDir);
-    } catch (e) {
-      hilog.info(DOMAIN, TAG, `checkCloudBackupRecords: dir not exist, creating`);
-      try {
-        await fs.mkdir(cloudDir);
-      } catch (err) {
-        hilog.error(DOMAIN, TAG, `checkCloudBackupRecords: mkdir failed: ${JSON.stringify(err)}`);
-        return 0;
-      }
-    }
-
-    const files: Array<string> = fs.listFileSync(cloudDir);
-    for (let i = 0; i < files.length; i++) {
-      if (isBackupFileName(files[i])) {
-        recordCount++;
-      }
-    }
-  } catch (e) {
-    hilog.error(DOMAIN, TAG, `checkCloudBackupRecords: error=${JSON.stringify(e)}`);
+    const files = fs.listFileSync(cloudDir);
+    return files.filter((name: string): boolean => /^otp_backup_-?\d+\.enc(?![\s\S])/.test(name) &&
+      Number.isSafeInteger(parseBackupTimestamp(name))).length;
+  } catch (_) {
+    return -1;
   }
-
-  hilog.info(DOMAIN, TAG, `checkCloudBackupRecords: found ${recordCount} records`);
-  return recordCount;
 }
 
-/**
- * 在 TaskPool 后台线程中加载完整备份历史记录。
- * 1. 遍历云端目录，筛选 otp_backup_*.enc 文件
- * 2. 读取每个文件内容，解析 JWT-like header 获取 tokenCount/deviceId/deviceName 等元数据
- * 3. 云端仅存文件（location=2）本地没有文件体，须由主线程先调
- *    CloudBackupManager.cacheCloudOnlyBackups() 预缓存；未缓存成功时
- *    读取失败降级为仅 stat 信息（deviceId 为空，UI 兜底显示"未知设备"）
- * 4. 按时间戳降序排列返回
- * @param cloudDir 云端目录路径（由主线程传入，避免在子线程访问 AppStorage/单例）
- * @returns 备份记录数组
- */
+/** 调用方持有 HISTORY 许可；仅真实在途任务阻断读取，预缓存失败与文件位置不是读取禁令。 */
 @Concurrent
-export async function loadBackupHistoryRecords(cloudDir: string): Promise<CloudBackupRecord[]> {
-  const base64Helper: util.Base64Helper = new util.Base64Helper();
-  const records: CloudBackupRecord[] = [];
-  const TAG = 'CloudSyncTask';
-  const DOMAIN = 0xFF00;
-
+export async function loadBackupHistoryRecords(cloudDir: string, readBlocked: boolean = false,
+  _context?: DiagnosticContext): Promise<CloudBackupTaskHistory> {
+  const result: CloudBackupTaskHistory = { records: [], diagnostics: [], complete: true };
+  const MAX_HISTORY_FILE_SIZE = 64 * 1024 * 1024;
+  const base64 = new util.Base64Helper();
   try {
-    const files: Array<string> = fs.listFileSync(cloudDir);
-    for (let i = 0; i < files.length; i++) {
-      const fileName: string = files[i];
-      if (!isBackupFileName(fileName)) {
-        continue;
-      }
-
-      const filePath: string = `${cloudDir}/${fileName}`;
+    const names = fs.listFileSync(cloudDir);
+    for (const name of names) {
+      if (!/^otp_backup_-?\d+\.enc(?![\s\S])/.test(name)) continue;
+      const timestamp = parseBackupTimestamp(name);
+      if (!Number.isSafeInteger(timestamp)) continue;
       try {
-        const stat = await fs.stat(filePath);
-        const timestamp: number = parseBackupTimestamp(fileName);
-
-        if (isNaN(timestamp)) {
+        const path = `${cloudDir}/${name}`;
+        const stat = await fs.stat(path);
+        const record: CloudBackupRecord = {
+          id: name, timestamp: timestamp, date: formatRecordDate(timestamp), tokenCount: 0,
+          size: stat.size, encrypted: true, deviceId: '', deviceName: '', location: stat.location,
+          metadataStatus: readBlocked || stat.location === 2 ?
+            CloudBackupMetadataStatus.PENDING : CloudBackupMetadataStatus.READ_FAILED,
+          identityStatus: CloudBackupIdentityStatus.ID_MISSING, tokenCountKnown: false,
+        };
+        if (readBlocked) {
+          result.records.push(record);
           continue;
         }
-
-        let tokenCount: number = 0;
-        let fileSize: number = stat.size;
-        let deviceId: string = '';
-        let deviceName: string = '';
+        let content: string | undefined = undefined;
         try {
-          const file = fs.openSync(filePath, fs.OpenMode.READ_ONLY);
-          const bufferArray: ArrayBuffer = new ArrayBuffer(stat.size);
-          const readLen: number = fs.readSync(file.fd, bufferArray);
-          fs.closeSync(file);
-          const uint8Array: Uint8Array = new Uint8Array(bufferArray.slice(0, readLen));
-          const tokenContent: string = buffer.from(uint8Array).toString('utf-8');
-          const segments: string[] = tokenContent.split('.');
-          if (segments.length === 3) {
-            const headerBytes: Uint8Array = base64Helper.decodeSync(segments[0]);
-            const headerJson: string = buffer.from(headerBytes).toString('utf-8');
-            const header: CloudBackupTokenHeader = JSON.parse(headerJson) as CloudBackupTokenHeader;
-            tokenCount = header.tokenCount;
-            fileSize = header.size;
-            deviceId = header.deviceId;
-            deviceName = header.deviceName;
+          if (!Number.isSafeInteger(stat.size) || stat.size < 0 || stat.size > MAX_HISTORY_FILE_SIZE) {
+            throw new Error('HISTORY_READ_LIMIT');
           }
-        } catch (e) {
-          hilog.warn(DOMAIN, TAG, `loadBackupHistoryRecords: parse header failed for ${fileName}`);
+          const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
+          try {
+            const bytes = new Uint8Array(stat.size);
+            let offset = 0;
+            while (offset < bytes.byteLength) {
+              const chunk = new ArrayBuffer(Math.min(bytes.byteLength - offset, 65536));
+              const length = fs.readSync(file.fd, chunk, { offset: offset });
+              if (!Number.isInteger(length) || length <= 0 || length > chunk.byteLength) {
+                throw new Error('HISTORY_SHORT_READ');
+              }
+              bytes.set(new Uint8Array(chunk, 0, length), offset);
+              offset += length;
+            }
+            content = buffer.from(bytes).toString('utf-8');
+          } finally {
+            fs.closeSync(file);
+          }
+        } catch (error) {
+          content = undefined;
+          record.metadataStatus = CloudBackupMetadataStatus.READ_FAILED;
+          appendDiagnosticSummary(result.diagnostics, DiagnosticStage.READ_END, DiagnosticResult.FAIL,
+            { reason: DiagnosticReason.IO_ERROR, errorDomain: DiagnosticErrorDomain.FS, code: fileIoDiagnosticCode(error) });
         }
-
-        const dateStr: string = formatRecordDate(timestamp);
-
-        const record: CloudBackupRecord = {
-          id: fileName,
-          date: dateStr,
-          timestamp: timestamp,
-          tokenCount: tokenCount,
-          size: fileSize,
-          encrypted: true,
-          deviceId: deviceId,
-          deviceName: deviceName,
-          location: stat.location,
-        };
-        records.push(record);
-      } catch (e) {
-        hilog.error(DOMAIN, TAG, `loadBackupHistoryRecords: stat error for ${fileName}=${JSON.stringify(e)}`);
+        if (content !== undefined) {
+          let invalid = false;
+          try {
+            const segments = content.split('.');
+            if (segments.length !== 3 || segments.some((segment: string): boolean => segment.length === 0) ||
+              !isBackupBase64(segments[0])) {
+              invalid = true;
+              throw new Error('HEADER_FORMAT');
+            }
+            const decoded = base64.decodeSync(segments[0]);
+            const headerJson = buffer.from(decoded).toString('utf-8');
+            if (decoded.byteLength === 0 || headerJson.length === 0) throw new Error('HEADER_DECODE_UNAVAILABLE');
+            const parsed = parseCloudBackupHeaderJson(headerJson);
+            if (!parsed.valid || parsed.header === undefined) {
+              invalid = true;
+              throw new Error('HEADER_FORMAT');
+            }
+            const header = parsed.header;
+            record.deviceId = header.deviceId;
+            record.deviceName = header.deviceName;
+            record.size = header.size;
+            record.tokenCount = header.tokenCount;
+            record.tokenCountKnown = true;
+            record.metadataStatus = CloudBackupMetadataStatus.VALID;
+            record.identityStatus = parsed.identityStatus;
+          } catch (_) {
+            record.metadataStatus = !invalid ? CloudBackupMetadataStatus.READ_FAILED :
+              stat.location === 2 ? CloudBackupMetadataStatus.PENDING :
+                stat.location === 1 || stat.location === 3 ? CloudBackupMetadataStatus.INVALID : CloudBackupMetadataStatus.READ_FAILED;
+            appendDiagnosticSummary(result.diagnostics, DiagnosticStage.HEADER_PARSE, DiagnosticResult.FAIL,
+              { reason: invalid ? DiagnosticReason.INVALID_FORMAT : DiagnosticReason.DECRYPT_FAILED,
+                headerParsed: false, contentNonEmpty: content.length > 0 });
+          }
+        }
+        result.records.push(record);
+      } catch (error) {
+        result.complete = false;
+        appendDiagnosticSummary(result.diagnostics, DiagnosticStage.READ_END, DiagnosticResult.FAIL,
+          { reason: DiagnosticReason.IO_ERROR, errorDomain: DiagnosticErrorDomain.FS, code: fileIoDiagnosticCode(error) });
       }
     }
-
-    records.sort((a: CloudBackupRecord, b: CloudBackupRecord) => b.timestamp - a.timestamp);
-  } catch (e) {
-    hilog.error(DOMAIN, TAG, `loadBackupHistoryRecords: error=${JSON.stringify(e)}`);
+  } catch (error) {
+    result.complete = false;
+    appendDiagnosticSummary(result.diagnostics, DiagnosticStage.HISTORY_END, DiagnosticResult.FAIL,
+      { reason: DiagnosticReason.IO_ERROR, errorDomain: DiagnosticErrorDomain.FS, code: fileIoDiagnosticCode(error) });
   }
-
-  hilog.info(DOMAIN, TAG, `loadBackupHistoryRecords: returning ${records.length} records`);
-  return records;
+  result.records.sort((a: CloudBackupRecord, b: CloudBackupRecord): number => b.timestamp - a.timestamp);
+  return result;
 }
-
-

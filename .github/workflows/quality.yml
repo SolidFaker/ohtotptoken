@@ -22,10 +22,9 @@ concurrency:
 jobs:
   node-regression:
     name: Node offline checks
-    # These scripts need no HarmonyOS SDK and no npm dependencies (node: builtins
-    # only): Steam field-number cross-check against the committed reference
-    # snapshot, string-resource completeness, and the TokenStore/KvManager
-    # regression suites. Previously they only ran on the author's machine.
+    # No SDK or npm install is required. Import regressions use the production
+    # JSZip core from an integrity-checked, lockfile-pinned OHPM HAR; the other
+    # suites use Node builtins and SDK-boundary fakes.
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -46,6 +45,16 @@ jobs:
         run: node scripts/verify-steam-field-numbers.mjs
         shell: bash
 
+      - name: Check cloud backup diagnostic privacy
+        run: node scripts/check-cloud-backup-diagnostic-privacy.mjs
+        shell: bash
+
+      - name: Prepare integrity-checked production JSZip core
+        run: node scripts/prepare-icon-pack-jszip.mjs --github-env
+        shell: bash
+
+      # Includes collector limits/synthetic leak sentinels and privacy-gate regressions.
+      # Device collection is never run in CI and no raw hilog is uploaded as an artifact.
       - name: Run node regression suites
         run: node --test "scripts/*.test.mjs"
         shell: bash

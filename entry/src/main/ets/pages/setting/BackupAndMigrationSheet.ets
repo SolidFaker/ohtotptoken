@@ -1,32 +1,27 @@
-import { TokenConfig, otpType, dialogSystemMaterial } from 'common';
-
+import { bundleManager } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { bundleManager,common } from '@kit.AbilityKit';
-import { convertToken2URI, generateFileNameWithDate } from 'common'
-import { showSnackBar, SnackBarNotifyType } from 'common';
+import { AppStorageV2, LengthMetrics, promptAction } from '@kit.ArkUI';
+import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
+import {
+  AppPreference, AppWindowInfo, convertToken2URI, dialogSystemMaterial, encodeLocalBackup, generateFileNameWithDate,
+  HuaweiAccountManager, LocalBackupError, LocalBackupFailure, LocalBackupFileIo, LocalBackupKind, LocalBackupSource,
+  otpType, PREF_KEYS, readLocalBackupSource, ROUTE_NAMES, showSaveFilePicker, showSelectFilePicker, showSnackBar,
+  SnackBarNotifyType, TokenBackup, TokenConfig, TokenImporter, TokenImporterRegistry
+} from 'common';
 import { SubItemButton } from '../../components/SubItemButton';
 import { SubItemToggle } from '../../components/SubItemToggle';
 import { SettingItem } from '../../components/SettingItem';
-import { EncryptionPassWordDialog } from '../../dialogs/EncryptionPassWordDialog';
-import { saveBackupToFile, TokenBackup } from 'common';
-import { importBackupWithProgress, TokenImportHandler } from '../../utils/BackupImportOperation';
-import { TokenBatchOperation } from '../../utils/TokenBatchOperation';
-import { TokenProgressDialog, TokenProgressDialogParams } from '../../dialogs/TokenProgressDialog';
-import { showSaveFilePicker, showSelectFilePicker, writeFileContent } from 'common';
 import { SubItemDivider } from '../../components/SubItemDivider';
-import { LengthMetrics, AppStorageV2 } from '@kit.ArkUI';
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import { AppPreference, SettingValue, PREF_KEYS, ROUTE_NAMES } from 'common';
-import { throttle } from 'common';
-import { ShowCloudSyncDetailsPage } from '../ShowCloudSyncDetailsPage';
-import { ShowCloudBackupHistoryPage } from '../ShowCloudBackupHistoryPage';
-import { HuaweiAccountManager } from 'common';
-import { hdsMaterial, HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
-import { TokenImporterRegistry, TokenImporter } from 'common';
+import { EncryptionPassWordDialog } from '../../dialogs/EncryptionPassWordDialog';
+import { commitPreparedBackup, TokenImportHandler } from '../../utils/BackupImportOperation';
+import { TokenBatchOperation } from '../../utils/TokenBatchOperation';
+import { isLocalBackupMenuCancellation, LocalBackupFlow, LocalBackupStage } from '../../utils/LocalBackupFlow';
+import { TokenProgressDialog, TokenProgressDialogParams } from '../../dialogs/TokenProgressDialog';
+// [冷启动优化] 云面板及配置延迟到备份页面首次构建，避免冷启动加载。
+import lazy { CloudBackupDetailsSheet, cloudBackupDetailsSheetOptions } from './CloudBackupDetailsSheet';
 import { UriImportSheet } from './UriImportSheet';
 import { SETTING_PAGE_INSET } from '../../components/SettingStyle';
 import { MaterialTheme } from '../../components/MaterialTheme';
-import { AppWindowInfo } from 'common';
 
 @Preview
 @ComponentV2
@@ -35,240 +30,367 @@ export struct BackupAndMigrationSheet {
   @Require @Param Tokens: Array<TokenConfig> = [];
   @Require @Param scrollEffectStyle: ScrollEffectType = ScrollEffectType.IMMERSIVE_GRADIENT_BLUR;
   @Param embedded: boolean = false;
+  @Param hostActive: boolean = true;
   @Event backupReload: TokenImportHandler = async () => {};
   @Event onUriImportVisibilityChange: (visible: boolean) => void = () => {};
+  @Event onLocalExecutionChange: (executing: boolean) => void = () => {};
 
   @Local versionCode?: number;
   @Local cloudBackupEnabled: boolean = false;
+  @Local cloudDetailsVisible: boolean = false;
   @Local isHuaweiLoggedIn: boolean = false;
   @Local importers: TokenImporter[] = [];
   @Local window: AppWindowInfo = AppStorageV2.connect(AppWindowInfo) as AppWindowInfo;
+  @Local flow: LocalBackupFlow = new LocalBackupFlow((executing: boolean) => {
+    this.onLocalExecutionChange(executing);
+    if (this.flow.stage === LocalBackupStage.IDLE) { this.clearSensitiveReferences(); }
+  });
   private sheetScroller: Scroller = new Scroller();
-
-  // 导入时选择的备份文件路径
-  private backup_select_uri: string = '';
-  private appCtx = AppStorage.get<common.UIAbilityContext>('appContext') as common.UIAbilityContext;
+  private exportSnapshot: TokenBackup | undefined;
+  private source: LocalBackupSource | undefined;
+  private encodedExport: string = '';
+  private passwordDialogId: number | undefined;
+  private afterPasswordClosed: (() => void) | undefined;
 
   aboutToAppear(): void {
-    let bundleInfo = AppStorage.get<bundleManager.BundleInfo>("BundleInfo");
-    this.versionCode = bundleInfo?.versionCode;
+    this.flow.activate();
+    this.versionCode = AppStorage.get<bundleManager.BundleInfo>('BundleInfo')?.versionCode;
     this.cloudBackupEnabled = AppPreference.getPreference(PREF_KEYS.APPEARANCE_HUAWEI_CLOUD_SYNC_ENABLE) as boolean;
     this.isHuaweiLoggedIn = HuaweiAccountManager.getInstance().userLogin;
-    // 初始化导入器注册表
     const registry = TokenImporterRegistry.getInstance();
     registry.init();
     this.importers = registry.getAll();
   }
 
-  //region 加密导入导出
-  @Builder
-  EncryptionPasswordExportDialogBuilder(): void {
-    EncryptionPassWordDialog({
-      title: $r('app.string.dialog_backup_password_set'),
-      showConfirmPassword: true,
-      confirm: (password: string) => {
-        // NFC 外部令牌仅会话存在、不持久化，导出前统一过滤（不含空 secret 伪 TOTP）
-        const exportable = this.Tokens.filter(t => t.TokenType !== otpType.NFC_external);
-        if (exportable.length === 0) {
-          showSnackBar($r('app.string.toast_no_exportable_tokens'), SnackBarNotifyType.WARNING);
-          return;
-        }
-        showSaveFilePicker([`totp_backup_${generateFileNameWithDate()}.bak`], ['BAK|.bak']).then((uris) => {
-          const backup: TokenBackup = new TokenBackup(this.versionCode ?? 0, exportable);
-          if (uris[0] !== undefined && uris[0] !== '') {
-            saveBackupToFile(uris[0], backup, true, password).then(() => {
-              showSnackBar($r('app.string.toast_backup_success'), SnackBarNotifyType.SUCCESS);
-            }).catch((reason: BusinessError) => {
-              showSnackBar(reason.message, SnackBarNotifyType.ERROR);
-            });
-          }
-        });
-      }
-    })
+  @Monitor('hostActive')
+  onHostActiveChanged(): void {
+    if (this.hostActive) { this.flow.activate(); }
+    else {
+      this.flow.invalidate();
+      this.clearSensitiveReferences();
+      this.closePasswordDialog();
+    }
   }
 
-  @Builder
-  EncryptionPasswordImportDialogBuilder(): void {
-    EncryptionPassWordDialog({
-      title: $r('app.string.dialog_backup_password'),
-      confirm: (password: string) => {
-        importBackupWithProgress(this, this.backup_select_uri, true, password, this.backupReload);
-      }
-    })
+  aboutToDisappear(): void {
+    this.flow.invalidate();
+    this.clearSensitiveReferences();
+    this.closePasswordDialog();
   }
 
-  private openEncryptionPasswordDialog(builder: CustomBuilder): void {
-    this.getUIContext().getPromptAction().openCustomDialog({
-      systemMaterial: dialogSystemMaterial(),
-      builder: builder,
-      autoCancel: true,
-      alignment: DialogAlignment.Center
-    }).catch((error: BusinessError) => {
-      hilog.error(error.code, 'BackupAndMigrationSheet', `open password dialog failed: ${error.message}`);
-    });
+  private clearSensitiveReferences(): void {
+    this.afterPasswordClosed = undefined;
+    this.exportSnapshot = undefined;
+    this.source?.dispose();
+    this.source = undefined;
+    this.encodedExport = '';
   }
 
-  async callFilePickerSaveMigrationFile(): Promise<void> {
-    this.getUIContext().showAlertDialog(
-      {
-        title: $r('app.string.setting_migration_output'),
-        subtitle: $r('app.string.setting_migration_output_des'),
-        message: $r('app.string.setting_migration_output_msg'),
-        autoCancel: true,
-        alignment: DialogAlignment.Center,
-        gridCount: 4,
-        buttonDirection: DialogButtonDirection.HORIZONTAL,
+  private closePasswordDialog(): void {
+    const id = this.passwordDialogId;
+    this.passwordDialogId = undefined;
+    if (id !== undefined) {
+      try { this.getUIContext().getPromptAction().closeCustomDialog(id); } catch (_) {}
+    }
+  }
+
+  private finish(generation: number): void {
+    if (!this.flow.isCurrent(generation)) { return; }
+    this.clearSensitiveReferences();
+    this.flow.finish(generation);
+  }
+
+  private cancel(generation: number): void {
+    if (!this.flow.isCurrent(generation) || !this.flow.cancel()) { return; }
+    this.clearSensitiveReferences();
+  }
+
+  private fail(generation: number, message: ResourceStr): void {
+    if (!this.flow.isCurrent(generation)) { return; }
+    showSnackBar(message, SnackBarNotifyType.ERROR);
+    this.finish(generation);
+  }
+
+  private blocked(): boolean {
+    return this.cloudDetailsVisible || this.flow.stage !== LocalBackupStage.IDLE || TokenBatchOperation.isBusy();
+  }
+
+  private pageBackground(): ResourceColor {
+    return this.embedded ? $r('app.color.window_background') :
+      MaterialTheme.surfaceBackground($r('app.color.window_background'));
+  }
+
+  private beginExport(): number | undefined {
+    const generation = this.flow.begin();
+    if (generation === undefined) { return undefined; }
+    const exportable = this.Tokens.filter((token: TokenConfig): boolean => token.TokenType !== otpType.NFC_external);
+    if (exportable.length === 0) {
+      showSnackBar($r('app.string.toast_no_exportable_tokens'), SnackBarNotifyType.WARNING);
+      this.finish(generation);
+      return undefined;
+    }
+    try { this.exportSnapshot = new TokenBackup(this.versionCode ?? 0, exportable); } catch (_) {
+      this.fail(generation, $r('app.string.local_backup_prepare_failed'));
+      return undefined;
+    }
+    return generation;
+  }
+
+  private confirmStep(generation: number, title: ResourceStr, message: ResourceStr, action: ResourceStr,
+    warning: boolean, confirmed: () => void): void {
+    if (!this.flow.transition(generation, LocalBackupStage.CONFIRMING)) { return; }
+    try {
+      this.getUIContext().showAlertDialog({
+        systemMaterial: dialogSystemMaterial(), title: title, message: message,
+        autoCancel: true, alignment: DialogAlignment.Bottom, gridCount: 4,
+        offset: { dx: 0, dy: -Math.max(20, this.window.AvoidBottomHeight) },
+        buttonDirection: DialogButtonDirection.VERTICAL,
         buttons: [
-          {
-            value: $r('app.string.setting_migration_confirm'),
+          { value: action, fontColor: warning ? $r('sys.color.ohos_id_color_warning') : $r('sys.color.font_emphasize'),
             action: () => {
-              showSaveFilePicker([`totp_migration_${generateFileNameWithDate()}.txt`], ['TEXT|.txt']).then((uris) => {
-                // NFC 外部令牌不持久化，迁移导出同样过滤
-                const exportable = this.Tokens.filter(t => t.TokenType !== otpType.NFC_external);
-                if (exportable.length === 0) {
-                  showSnackBar($r('app.string.toast_no_exportable_tokens'), SnackBarNotifyType.WARNING);
-                  return;
-                }
-                let migration_content: string = '';
-                exportable.forEach((token) => {
-                  migration_content += convertToken2URI(token) + "\n";
-                })
-                if (uris[0] !== undefined && uris[0] !== '') {
-                  writeFileContent(uris[0], migration_content);
-                }
-              });
-            }
-          },
-          {
-            value: $r('app.string.setting_backup_cancel'),
-            enabled: true,
-            action: () => {
-              hilog.info(0, 'BackupAndMigrationSheet', 'Callback when button3 is clicked')
-            }
-          },
+              if (this.flow.isCurrent(generation) && this.flow.stage === LocalBackupStage.CONFIRMING) { confirmed(); }
+            } },
+          { value: $r('app.string.dialog_btn_cancel'), action: () => this.cancel(generation) }
         ],
-        cancel: () => {
-          hilog.info(0, 'BackupAndMigrationSheet', 'Closed callbacks')
-        },
-        onWillDismiss: (dismissDialogAction: DismissDialogAction) => {
-          hilog.info(0, 'BackupAndMigrationSheet', "reason=" + JSON.stringify(dismissDialogAction.reason))
-          hilog.info(0, 'BackupAndMigrationSheet', "dialog onWillDismiss")
-          if (dismissDialogAction.reason == DismissReason.PRESS_BACK) {
-            dismissDialogAction.dismiss()
-          }
-          if (dismissDialogAction.reason == DismissReason.TOUCH_OUTSIDE) {
-            dismissDialogAction.dismiss()
-          }
-        }
-      }
-    );
+        cancel: () => this.cancel(generation)
+      });
+    } catch (_) { this.fail(generation, $r('app.string.local_backup_prepare_failed')); }
   }
 
   async callFilePickerSaveFile(): Promise<void> {
-    this.getUIContext().showAlertDialog(
-      {
-        title: $r('app.string.setting_backup_output'),
-        message: $r('app.string.setting_backup_output_msg'),
-        autoCancel: true,
-        alignment: DialogAlignment.Center,
-        gridCount: 4,
-        buttonDirection: DialogButtonDirection.HORIZONTAL,
+    const generation = this.beginExport();
+    if (generation === undefined) { return; }
+    try {
+      this.getUIContext().getPromptAction().showActionMenu({
+        systemMaterial: dialogSystemMaterial(), title: $r('app.string.setting_backup_output'),
         buttons: [
-          {
-            value: $r('app.string.setting_backup_type_enc'),
-            action: () => {
-              this.openEncryptionPasswordDialog(() => {
-                this.EncryptionPasswordExportDialogBuilder();
-              });
-            }
-          },
-          {
-            value: $r('app.string.setting_backup_type_default'),
-            action: () => {
-              // NFC 外部令牌仅会话存在、不持久化，导出前统一过滤
-              const exportable = this.Tokens.filter(t => t.TokenType !== otpType.NFC_external);
-              if (exportable.length === 0) {
-                showSnackBar($r('app.string.toast_no_exportable_tokens'), SnackBarNotifyType.WARNING);
-                return;
-              }
-              showSaveFilePicker([`totp_backup_${generateFileNameWithDate()}.json`], ['JSON|.json']).then((uris) => {
-                const backup: TokenBackup = new TokenBackup(this.versionCode, exportable);
-                if (uris[0] !== undefined && uris[0] !== '') {
-                  saveBackupToFile(uris[0], backup).then(() => {
-                    showSnackBar($r('app.string.toast_backup_success'), SnackBarNotifyType.SUCCESS);
-                  }).catch((reason: BusinessError) => {
-                    showSnackBar(reason.message, SnackBarNotifyType.ERROR);
-                  });
-                }
-              });
-            }
-          },
-          {
-            value: $r('app.string.setting_backup_cancel'),
-            enabled: true,
-            action: () => {
-              hilog.info(0, 'BackupAndMigrationSheet', 'Callback when button3 is clicked')
-            }
-          },
-        ],
-        cancel: () => {
-          hilog.info(0, 'BackupAndMigrationSheet', 'Closed callbacks')
-        },
-        onWillDismiss: (dismissDialogAction: DismissDialogAction) => {
-          hilog.info(0, 'BackupAndMigrationSheet', "reason=" + JSON.stringify(dismissDialogAction.reason))
-          hilog.info(0, 'BackupAndMigrationSheet', "dialog onWillDismiss")
-          if (dismissDialogAction.reason == DismissReason.PRESS_BACK) {
-            dismissDialogAction.dismiss()
-          }
-          if (dismissDialogAction.reason == DismissReason.TOUCH_OUTSIDE) {
-            dismissDialogAction.dismiss()
-          }
+          { text: $r('app.string.setting_backup_type_enc'), color: $r('sys.color.font_primary') },
+          { text: $r('app.string.setting_backup_type_default'), color: $r('sys.color.font_primary') }
+        ]
+      }, (error: BusinessError, result: promptAction.ActionMenuSuccessResponse) => {
+        if (!this.flow.isCurrent(generation) || this.flow.stage !== LocalBackupStage.CHOOSING) { return; }
+        if (error) {
+          if (isLocalBackupMenuCancellation(error)) { this.cancel(generation); }
+          else { this.fail(generation, $r('app.string.local_backup_prepare_failed')); }
+          return;
         }
+        if (result.index < 0) { this.cancel(generation); return; }
+        if (result.index === 0) { this.openPassword(generation, true); }
+        else if (result.index === 1) {
+          this.confirmStep(generation, $r('app.string.setting_backup_type_default'),
+            $r('app.string.local_backup_plain_warning'), $r('app.string.local_backup_export_anyway'), true,
+            () => { this.prepareExport(generation, false); });
+        } else { this.cancel(generation); }
+      });
+    } catch (_) { this.fail(generation, $r('app.string.local_backup_prepare_failed')); }
+  }
+
+  async callFilePickerSaveMigrationFile(): Promise<void> {
+    const generation = this.beginExport();
+    if (generation === undefined) { return; }
+    this.confirmStep(generation, $r('app.string.setting_migration_output'),
+      $r('app.string.local_backup_migration_warning'), $r('app.string.local_backup_export_anyway'), true,
+      () => { this.prepareExport(generation, true); });
+  }
+
+  private async prepareExport(generation: number, migration: boolean): Promise<void> {
+    const backup = this.exportSnapshot;
+    if (!this.flow.isCurrent(generation) || backup === undefined) { return; }
+    try {
+      await this.flow.progress(this, $r('app.string.local_backup_processing'), generation, false, async () => {
+        const encoded = migration ? backup.configs.map((token: TokenConfig): string => convertToken2URI(token) + '\n').join('') :
+          await encodeLocalBackup(backup);
+        if (this.flow.isCurrent(generation)) { this.encodedExport = encoded; }
+      });
+      if (this.flow.isCurrent(generation)) {
+        this.exportSnapshot = undefined;
+        await this.savePreparedExport(generation, migration ? 'txt' : 'json');
       }
-    );
+    } catch (_) { this.fail(generation, $r('app.string.local_backup_prepare_failed')); }
+  }
+
+  private async savePreparedExport(generation: number, extension: string): Promise<void> {
+    if (!this.flow.transition(generation, LocalBackupStage.PICKING)) { return; }
+    let uris: string[];
+    try {
+      const name = extension === 'txt' ? 'totp_migration_' : 'totp_backup_';
+      uris = await showSaveFilePicker([`${name}${generateFileNameWithDate()}.${extension}`], [`${extension.toUpperCase()}|.${extension}`]);
+    } catch (_) { this.fail(generation, $r('app.string.local_backup_picker_failed')); return; }
+    if (!this.flow.isCurrent(generation)) { return; }
+    if (uris.length === 0 || !uris[0]) { this.cancel(generation); return; }
+    const content = this.encodedExport;
+    this.encodedExport = '';
+    try {
+      await this.flow.progress(this, $r('app.string.local_backup_saving'), generation, true, async () => {
+        await new LocalBackupFileIo().writeText(uris[0], content);
+      });
+      if (this.flow.isCurrent(generation)) {
+        showSnackBar($r('app.string.local_backup_saved'), SnackBarNotifyType.SUCCESS);
+      }
+    } catch (_) {
+      if (this.flow.isCurrent(generation)) { showSnackBar($r('app.string.local_backup_save_incomplete'), SnackBarNotifyType.ERROR); }
+    } finally { this.finish(generation); }
+  }
+
+  @Builder
+  PasswordBuilder(generation: number, exporting: boolean) {
+    EncryptionPassWordDialog({
+      title: exporting ? $r('app.string.dialog_backup_password_set') : $r('app.string.dialog_backup_password'),
+      description: exporting ? $r('app.string.local_backup_password_notice') : $r('app.string.local_backup_password_original'),
+      showConfirmPassword: exporting,
+      isActive: () => this.flow.isCurrent(generation),
+      submitError: exporting ? $r('app.string.local_backup_prepare_failed') : $r('app.string.local_backup_password_failed'),
+      submit: async (password: string): Promise<boolean> => {
+        if (!this.flow.isCurrent(generation) || this.flow.stage !== LocalBackupStage.PASSWORD) { return false; }
+        const backup = this.exportSnapshot;
+        const source = this.source;
+        try {
+          await this.flow.work(generation, false, async () => {
+            if (exporting && backup !== undefined) {
+              const content = await encodeLocalBackup(backup, true, password);
+              if (this.flow.isCurrent(generation)) { this.encodedExport = content; }
+            } else if (!exporting && source !== undefined) {
+              const prepared = await source.prepare(password);
+              this.flow.remember(generation, prepared);
+            } else { throw new Error('Local backup source unavailable'); }
+          });
+          if (!this.flow.isCurrent(generation)) { return false; }
+          this.exportSnapshot = undefined;
+          this.source?.dispose();
+          this.source = undefined;
+          this.flow.transition(generation, exporting ? LocalBackupStage.PICKING : LocalBackupStage.CONFIRMING);
+          return true;
+        } catch (_) {
+          this.flow.transition(generation, LocalBackupStage.PASSWORD);
+          return false;
+        }
+      },
+      accepted: () => {
+        this.afterPasswordClosed = () => {
+          if (!this.flow.isCurrent(generation)) { return; }
+          if (exporting) { this.savePreparedExport(generation, 'bak'); }
+          else { this.showImportSummary(generation); }
+        };
+        this.closePasswordDialog();
+      },
+      cancel: () => {
+        this.cancel(generation);
+        this.closePasswordDialog();
+      }
+    })
+  }
+
+  private async openPassword(generation: number, exporting: boolean): Promise<void> {
+    if (!this.flow.transition(generation, LocalBackupStage.PASSWORD)) { return; }
+    try {
+      const id = await this.getUIContext().getPromptAction().openCustomDialog({
+        systemMaterial: dialogSystemMaterial(), builder: () => { this.PasswordBuilder(generation, exporting); },
+        autoCancel: true, alignment: DialogAlignment.Top, offset: { dx: 0, dy: 16 },
+        keyboardAvoidMode: KeyboardAvoidMode.DEFAULT,
+        onDidDisappear: () => {
+          const next = this.afterPasswordClosed;
+          this.afterPasswordClosed = undefined;
+          next?.();
+        },
+        onWillDismiss: (action: DismissDialogAction) => {
+          if (this.flow.stage === LocalBackupStage.PASSWORD || this.flow.stage === LocalBackupStage.PREPARING) {
+            this.cancel(generation);
+          }
+          action.dismiss();
+        }
+      });
+      if (!this.flow.isCurrent(generation)) {
+        this.getUIContext().getPromptAction().closeCustomDialog(id);
+      } else { this.passwordDialogId = id; }
+    } catch (_) { this.fail(generation, $r('app.string.local_backup_prepare_failed')); }
   }
 
   async callFilePickerSelectFile(): Promise<void> {
-    if (TokenBatchOperation.isBusy()) {
-      return;
+    const generation = this.flow.begin(LocalBackupStage.PICKING);
+    if (generation === undefined) { return; }
+    let uris: string[];
+    try { uris = await showSelectFilePicker(1, ['JSON|.json', 'BAK|.bak', 'TEXT|.txt']); } catch (_) {
+      this.fail(generation, $r('app.string.local_backup_picker_failed')); return;
     }
-    showSelectFilePicker(1, ['JSON|.json', 'BAK|.bak']).then((uris) => {
-      if (uris.length === 0 || !uris[0]) {
-        return;
-      }
-      this.backup_select_uri = uris[0];
-      if (this.backup_select_uri.endsWith('.bak')) {
-        //后缀bak为加密包 唤醒加密导入弹窗
-        this.openEncryptionPasswordDialog(() => {
-          this.EncryptionPasswordImportDialogBuilder();
-        });
+    if (!this.flow.isCurrent(generation)) { return; }
+    if (uris.length === 0 || !uris[0]) { this.cancel(generation); return; }
+    try {
+      await this.flow.progress(this, $r('app.string.local_backup_processing'), generation, false, async (report) => {
+        const source = await readLocalBackupSource(uris[0], new LocalBackupFileIo(undefined,
+          () => !this.flow.isCurrent(generation)), report);
+        if (!this.flow.isCurrent(generation)) { source.dispose(); return; }
+        this.source = source;
+        if (source.kind === LocalBackupKind.PLAIN) {
+          this.flow.remember(generation, await source.prepare('', report));
+        }
+      });
+      if (!this.flow.isCurrent(generation) || this.source === undefined) { return; }
+      const kind = this.source.kind;
+      if (kind === LocalBackupKind.PASSWORD_V2 || kind === LocalBackupKind.LEGACY_CANDIDATE) {
+        await this.openPassword(generation, false);
       } else {
-        importBackupWithProgress(this, uris[0], false, '', this.backupReload);
+        this.source.dispose();
+        this.source = undefined;
+        if (kind === LocalBackupKind.PLAIN) { this.showImportSummary(generation); }
+        else if (kind === LocalBackupKind.MIGRATION) {
+          this.confirmStep(generation, $r('app.string.local_backup_migration_title'), $r('app.string.local_backup_migration_redirect'),
+            $r('app.string.local_backup_open_uri'), false, () => {
+              this.finish(generation);
+              this.pageInfos.pushPathByName(ROUTE_NAMES.UriImportSheet, null);
+            });
+        } else { this.fail(generation, $r('app.string.local_backup_unsupported')); }
       }
-    });
-  }
-
-  @Builder
-  navDestinationBuilder(name: string, param: Object) {
-    if (name === ROUTE_NAMES.ShowCloudSyncDetailsPage) {
-      ShowCloudSyncDetailsPage({ scrollEffectType: this.scrollEffectStyle })
-    } else if (name === ROUTE_NAMES.ShowCloudBackupHistoryPage) {
-      ShowCloudBackupHistoryPage({ scrollEffectType: this.scrollEffectStyle })
-    } else if (name === ROUTE_NAMES.UriImportSheet) {
-      UriImportSheet({
-        scrollEffectStyle: this.scrollEffectStyle,
-        backupReload: this.backupReload,
-        onVisibilityChange: this.onUriImportVisibilityChange
-      })
+    } catch (error) {
+      const reason = error instanceof LocalBackupError ? error.reason : LocalBackupFailure.FORMAT;
+      this.fail(generation, reason === LocalBackupFailure.READ ? $r('app.string.local_backup_read_failed') :
+        $r('app.string.local_backup_unsupported'));
     }
   }
 
-  //endregion
+  private showImportSummary(generation: number): void {
+    const prepared = this.flow.snapshot(generation);
+    if (prepared === undefined) { return; }
+    this.confirmStep(generation, $r('app.string.local_backup_summary_title'),
+      prepared.encrypted ? $r('app.string.local_backup_summary_encrypted', prepared.tokenCount, prepared.groupCount) :
+        $r('app.string.local_backup_summary_plain', prepared.tokenCount, prepared.groupCount),
+      $r('app.string.local_backup_import_confirm'), false, () => { this.commitImport(generation); });
+  }
+
+  private async commitImport(generation: number): Promise<void> {
+    const prepared = this.flow.snapshot(generation);
+    if (prepared === undefined || this.flow.stage !== LocalBackupStage.CONFIRMING) { return; }
+    try {
+      await this.flow.progress(this, $r('app.string.token_batch_import_title'), generation, true, async (report) => {
+        await commitPreparedBackup(prepared, this.backupReload, report);
+      });
+      if (this.flow.isCurrent(generation)) {
+        showSnackBar($r('app.string.toast_multi_token_update', prepared.tokenCount), SnackBarNotifyType.SUCCESS);
+      }
+    } catch (_) {
+      if (this.flow.isCurrent(generation)) {
+        showSnackBar($r('app.string.local_backup_import_incomplete'), SnackBarNotifyType.ERROR);
+      }
+    } finally { this.finish(generation); }
+  }
 
   @Builder
-  buildTokenProgressDialog(params: TokenProgressDialogParams) {
-    TokenProgressDialog({ params: params })
+  navDestinationBuilder(name: string, _param: Object) {
+    if (name === ROUTE_NAMES.UriImportSheet) {
+      UriImportSheet({ scrollEffectStyle: this.scrollEffectStyle, backupReload: this.backupReload,
+        onVisibilityChange: this.onUriImportVisibilityChange })
+    }
   }
+
+  @Builder
+  CloudDetailsContent() {
+    CloudBackupDetailsSheet({
+      scrollEffectType: this.scrollEffectStyle,
+      onClose: () => { this.cloudDetailsVisible = false; }
+    })
+  }
+
+  @Builder
+  buildTokenProgressDialog(params: TokenProgressDialogParams) { TokenProgressDialog({ params: params }) }
 
   build() {
     Column() {
@@ -277,57 +399,36 @@ export struct BackupAndMigrationSheet {
           List({ scroller: this.sheetScroller, space: 10 }) {
             ListItem() {
               SettingItem({ title: $r('app.string.setting_backup') }) {
-                SubItemButton({
-                  symbol: $r('sys.symbol.save'),
-                  text: $r('app.string.setting_backup_export')
-                })
-                  .onClick(() => {
-                    this.callFilePickerSaveFile()
-                  })
-
+                SubItemButton({ symbol: $r('sys.symbol.save'), text: $r('app.string.setting_backup_export'),
+                  description: $r('app.string.local_backup_export_description'), descriptionMaxLines: 0 })
+                  .id('local-backup-export').constraintSize({ minHeight: 48 }).enabled(!this.blocked())
+                  .accessibilityText($r('app.string.setting_backup_export')).onClick(() => { this.callFilePickerSaveFile(); })
                 SubItemDivider({ insetLeft: 46 })
-
-                SubItemButton({
-                  symbol: $r('sys.symbol.folder'),
-                  text: $r('app.string.setting_backup_import')
-                })
-                  .onClick(() => {
-                    this.callFilePickerSelectFile()
-                  })
-
+                SubItemButton({ symbol: $r('sys.symbol.folder'), text: $r('app.string.setting_backup_import'),
+                  description: $r('app.string.local_backup_import_description'), descriptionMaxLines: 0 })
+                  .id('local-backup-import').constraintSize({ minHeight: 48 }).enabled(!this.blocked())
+                  .accessibilityText($r('app.string.setting_backup_import')).onClick(() => { this.callFilePickerSelectFile(); })
                 SubItemDivider({ insetLeft: 46 })
-
-                SubItemButton({
-                  symbol: $r('sys.symbol.briefcase'),
-                  text: $r('app.string.setting_migration')
-                })
-                  .onClick(() => {
-                    this.callFilePickerSaveMigrationFile()
-                  })
+                SubItemButton({ symbol: $r('sys.symbol.briefcase'), text: $r('app.string.setting_migration'),
+                  description: $r('app.string.local_backup_migration_description'), descriptionMaxLines: 0 })
+                  .id('local-backup-migration').constraintSize({ minHeight: 48 }).enabled(!this.blocked())
+                  .accessibilityText($r('app.string.setting_migration')).onClick(() => { this.callFilePickerSaveMigrationFile(); })
               }
             }
             .padding({ left: SETTING_PAGE_INSET, right: SETTING_PAGE_INSET })
-
-            // 从其他验证器导入
             if (this.importers.length > 0) {
               ListItem() {
                 SettingItem({ title: $r('app.string.setting_import_from_other_apps') }) {
                   ForEach(this.importers, (importer: TokenImporter, index: number) => {
-                    if (index > 0) {
-                      SubItemDivider({ insetLeft: 46 })
-                    }
-                    SubItemButton({
-                      symbol: importer.icon,
-                      text: importer.name,
-                      description: importer.description
-                    })
+                    if (index > 0) { SubItemDivider({ insetLeft: 46 }) }
+                    SubItemButton({ symbol: importer.icon, text: importer.name, description: importer.description })
+                      .enabled(!this.blocked())
                       .onClick(() => {
-                        if (importer.id === 'uri') {
-                          this.pageInfos.pushPathByName(ROUTE_NAMES.UriImportSheet, null);
-                        } else {
-                          // 其他导入器（如 TwoFAImporter）使用各自的 import() 方法
+                        if (this.blocked()) { return; }
+                        if (importer.id === 'uri') { this.pageInfos.pushPathByName(ROUTE_NAMES.UriImportSheet, null); }
+                        else {
                           importer.import(this.getUIContext(), (tokens: Array<TokenConfig>) => {
-                            this.backupReload(tokens);
+                            if (!this.blocked()) { this.backupReload(tokens); }
                           });
                         }
                       })
@@ -336,131 +437,71 @@ export struct BackupAndMigrationSheet {
               }
               .padding({ left: SETTING_PAGE_INSET, right: SETTING_PAGE_INSET })
             }
-
             ListItem() {
               SettingItem({ title: $r('app.string.data_rdb_cloud_sync') }) {
-                SubItemToggle({
-                  icon: $r('sys.symbol.icloud'),
-                  title: $r('app.string.data_rdb_cloud_sync'),
-                  isOn: this.cloudBackupEnabled as boolean,
-                  disable: !this.isHuaweiLoggedIn,
-                  description: this.isHuaweiLoggedIn
-                    ? $r('app.string.data_rdb_cloud_sync_des')
-                    : $r('app.string.cloud_backup_login_required'),
-                  onChange: (IsOn: boolean) => {
-                    if (IsOn) {
-                      if (!HuaweiAccountManager.getInstance().userLogin) {
-                        this.cloudBackupEnabled = false;
-                        AppPreference.setPreference(PREF_KEYS.APPEARANCE_HUAWEI_CLOUD_SYNC_ENABLE, false);
-                        this.showHuaweiAccountRequiredDialog();
-                        return;
-                      }
+                SubItemToggle({ icon: $r('sys.symbol.icloud'), title: $r('app.string.data_rdb_cloud_sync'),
+                  isOn: this.cloudBackupEnabled, disable: !this.isHuaweiLoggedIn || this.blocked(),
+                  description: this.isHuaweiLoggedIn ? $r('app.string.data_rdb_cloud_sync_des') : $r('app.string.cloud_backup_login_required'),
+                  onChange: (isOn: boolean) => {
+                    if (this.blocked()) { return; }
+                    if (isOn && !HuaweiAccountManager.getInstance().userLogin) {
+                      this.cloudBackupEnabled = false;
+                      AppPreference.setPreference(PREF_KEYS.APPEARANCE_HUAWEI_CLOUD_SYNC_ENABLE, false);
+                      this.showHuaweiAccountRequiredDialog(); return;
                     }
-                    this.cloudBackupEnabled = IsOn;
-                    AppPreference.setPreference(PREF_KEYS.APPEARANCE_HUAWEI_CLOUD_SYNC_ENABLE, IsOn);
+                    this.cloudBackupEnabled = isOn;
+                    AppPreference.setPreference(PREF_KEYS.APPEARANCE_HUAWEI_CLOUD_SYNC_ENABLE, isOn);
                   }
                 })
-
                 SubItemDivider({ insetLeft: 46 })
-
-                SubItemButton({
-                  symbol: $r('sys.symbol.info_circle'),
-                  text: $r('app.string.data_huawei_cloud_sync_details'),
+                SubItemButton({ symbol: $r('sys.symbol.info_circle'), text: $r('app.string.data_huawei_cloud_sync_details'),
                   description: this.isHuaweiLoggedIn ? '' : $r('app.string.cloud_backup_login_required'),
-                  descriptionColor: $r('sys.color.ohos_id_color_warning'),
-                })
-                  .onClick(throttle((event) => {
-                    if (!this.isHuaweiLoggedIn) {
-                      this.showHuaweiAccountRequiredDialog();
-                      return;
-                    }
-                    this.pageInfos.pushPathByName(ROUTE_NAMES.ShowCloudSyncDetailsPage, null);
-                  }, 1000))
+                  descriptionColor: $r('sys.color.ohos_id_color_warning') })
+                  .id('cloud-backup-details-open')
+                  .enabled(!this.blocked())
+                  .onClick(() => {
+                    if (this.blocked()) { return; }
+                    if (!this.isHuaweiLoggedIn) { this.showHuaweiAccountRequiredDialog(); return; }
+                    this.cloudDetailsVisible = true;
+                  })
               }
             }
             .padding({ left: SETTING_PAGE_INSET, right: SETTING_PAGE_INSET })
           }
-          .clip(false)
-          .width('100%')
-          .height('100%')
-          .layoutWeight(1)
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-          // 滚动末端抬高底部避让区(导航条/小横条)，避免最后一项被遮挡
-          .contentEndOffset(this.window.AvoidBottomHeight)
-          // 沉浸档透明透出 Sheet 材质(Phase 5.4)，其余档位保持 window_background
-          .backgroundColor(MaterialTheme.surfaceBackground($r('app.color.window_background')))
+          .clip(false).width('100%').height('100%').layoutWeight(1).scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true }).contentEndOffset(this.window.AvoidBottomHeight)
+          .backgroundColor(this.pageBackground())
         }
-        .width('100%')
-        .height('100%')
-        // 沉浸档透明透出 Sheet 材质(Phase 5.4)，其余档位保持 window_background
-        .backgroundColor(MaterialTheme.surfaceBackground($r('app.color.window_background')))
+        .width('100%').height('100%').backgroundColor(this.pageBackground())
       }
-      .width('100%')
-      .height('100%')
-      // 嵌入分栏时与左侧设置列表同底色；半模态场景继续按材质策略透出背板。
-      .clip(false)
-      .backgroundColor(this.embedded ? $r('app.color.window_background') :
-        MaterialTheme.surfaceBackground($r('app.color.window_background')))
-      .mode(NavigationMode.Stack)
-      .navDestination(this.navDestinationBuilder)
-      .bindToScrollable([this.sheetScroller])
+      .width('100%').height('100%').clip(false).backgroundColor(this.pageBackground())
+      .mode(NavigationMode.Stack).navDestination(this.navDestinationBuilder).bindToScrollable([this.sheetScroller])
       .hideBackButton(this.embedded)
       .titleMode(this.embedded ? HdsNavigationTitleMode.MINI : HdsNavigationTitleMode.MODAL)
       .titleBar({
-        avoidLayoutSafeArea: this.embedded,
-        enableComponentSafeArea: true,
+        avoidLayoutSafeArea: this.embedded, enableComponentSafeArea: true,
         style: {
-          originalStyle: {
-            contentStyle: {
-              titleStyle: {
-                mainTitleColor: $r('sys.color.font_primary'),
-                subTitleColor: $r('sys.color.font_secondary')
-              },
-              backIconStyle: MaterialTheme.navigationIconStyle(),
-              menuStyle: MaterialTheme.navigationIconStyle()
-            },
-          },
+          originalStyle: { contentStyle: {
+            titleStyle: { mainTitleColor: $r('sys.color.font_primary'), subTitleColor: $r('sys.color.font_secondary') },
+            backIconStyle: MaterialTheme.navigationIconStyle(), menuStyle: MaterialTheme.navigationIconStyle()
+          } },
           scrollEffectStyle: MaterialTheme.navigationScrollStyle(),
-          scrollEffectOpts: {
-            enableScrollEffect: true,
-            scrollEffectType: this.scrollEffectStyle
-          },
-          systemMaterialEffect: {
-            materialType: MaterialTheme.hdsMaterialType(),
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-          }
+          scrollEffectOpts: { enableScrollEffect: true, scrollEffectType: this.scrollEffectStyle },
+          systemMaterialEffect: { materialType: MaterialTheme.hdsMaterialType(), materialLevel: MaterialTheme.hdsMaterialLevel() }
         },
-        content: {
-          title: {
-            mainTitle: $r('app.string.setting_backup'),
-          },
-        }
+        content: { title: { mainTitle: $r('app.string.setting_backup') } }
       })
     }
-    .width('100%')
-    .height('100%')
-    // 沉浸档透明透出 Sheet 材质(Phase 5.4)，其余档位保持 window_background
-    .backgroundColor(MaterialTheme.surfaceBackground($r('app.color.window_background')))
+    .width('100%').height('100%').backgroundColor(this.pageBackground())
+    .bindSheet($$this.cloudDetailsVisible, this.CloudDetailsContent(), cloudBackupDetailsSheetOptions())
   }
 
   private showHuaweiAccountRequiredDialog(): void {
     this.getUIContext().showAlertDialog({
-      systemMaterial: dialogSystemMaterial(),
-      title: $r('app.string.cloud_sync_require_huawei_account_title'),
-      message: $r('app.string.cloud_sync_require_huawei_account_msg'),
-      autoCancel: true,
-      alignment: DialogAlignment.Bottom,
-      gridCount: 4,
-      offset: { dx: 0, dy: -20 },
-      buttonDirection: DialogButtonDirection.HORIZONTAL,
-      buttons: [
-        {
-          value: $r('app.string.dialog_btn_confirm'),
-          action: () => {}
-        },
-      ],
-      cancel: () => {},
+      systemMaterial: dialogSystemMaterial(), title: $r('app.string.cloud_sync_require_huawei_account_title'),
+      message: $r('app.string.cloud_sync_require_huawei_account_msg'), autoCancel: true,
+      alignment: DialogAlignment.Bottom, gridCount: 4, offset: { dx: 0, dy: -20 },
+      buttons: [{ value: $r('app.string.dialog_btn_confirm'), action: () => {} }], cancel: () => {}
     });
   }
 }

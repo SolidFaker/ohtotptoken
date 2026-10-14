@@ -1,4 +1,4 @@
-import { describe, beforeAll, it, expect } from '@ohos/hypium';
+import { describe, beforeAll, afterEach, it, expect } from '@ohos/hypium';
 import { abilityDelegatorRegistry } from '@kit.TestKit';
 import { common } from '@kit.AbilityKit';
 import {

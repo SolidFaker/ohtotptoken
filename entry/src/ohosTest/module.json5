@@ -8,6 +8,17 @@
       "2in1"
     ],
     "deliveryWithInstall": true,
-    "installationFree": false
+    "installationFree": false,
+    "pages": "$profile:test_pages",
+    "metadata": [{ "name": "ohos.arkui.UIMaterial.state", "value": "enable" }],
+    "abilities": [
+      {
+        "name": "LocalBackupTestAbility",
+        "srcEntry": "./ets/testability/LocalBackupTestAbility.ets",
+        "startWindowIcon": "$media:startIcon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true
+      }
+    ]
   }
 }

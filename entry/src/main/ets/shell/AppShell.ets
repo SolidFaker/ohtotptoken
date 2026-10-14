@@ -85,6 +85,8 @@ export struct AppShell {
   @Require @Param scrollEffectType: ScrollEffectType = ScrollEffectType.IMMERSIVE_GRADIENT_BLUR;
   @Require @Param currentHomeTabIndex: number = 0;
   @Local groupState: TokenGroupState = TokenGroupStore.getInstance().state;
+  @Local localBackupExecuting: boolean = false;
+  @Local backupHostActive: boolean = true;
   @Event onSelectGroup: (id: string) => void = () => {};
   @Param groupSidebarOpen: boolean = false;
   @Event $groupSidebarOpen: (open: boolean) => void = () => {};
@@ -288,6 +290,8 @@ export struct AppShell {
           pageInfos: this.pageInfos,
           selectedRoute: name as ROUTE_NAMES,
           detailOnlyRoute: name,
+          localBackupHostActive: this.backupHostActive,
+          onLocalExecutionChange: (executing: boolean) => { this.localBackupExecuting = executing; },
           backupReload: this.backupReload,
           addTestTokens: () => this.addTestTokens(),
           removeTestTokens: () => this.removeTestTokens()
@@ -296,6 +300,17 @@ export struct AppShell {
       .clip(false)
       .hideTitleBar(true)
       .backgroundColor($r('app.color.window_background'))
+      .onShown(() => { if (name === ROUTE_NAMES.SettingBackup) { this.backupHostActive = true; } })
+      .onHidden(() => {
+        // 文件选择器或后台暂时覆盖不等于离开路由；API20 也可用栈顶判断。
+        const paths = this.pageInfos.getAllPathName();
+        if (name === ROUTE_NAMES.SettingBackup && paths[paths.length - 1] !== name) { this.backupHostActive = false; }
+      })
+      .onBackPressed(() => {
+        if (name !== ROUTE_NAMES.SettingBackup || !this.localBackupExecuting) { return false; }
+        showSnackBar($r('app.string.local_backup_processing'), SnackBarNotifyType.INFO);
+        return true;
+      })
     }
   }
 

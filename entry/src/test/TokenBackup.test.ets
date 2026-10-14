@@ -9,6 +9,7 @@ import {
   TokenGroupKvBackend,
   TokenGroupStore,
   otpType,
+  readLocalBackupSource,
   restoreFromBackup,
   saveBackupToFile,
   useCryptoEngineForTest,
@@ -145,6 +146,26 @@ export default function tokenBackupTest() {
         threw = true;
       }
       expect(threw).assertTrue();
+    });
+
+    it('prepare_does_not_merge_groups_and_export_snapshot_is_detached', 0, async () => {
+      bindGroupStore();
+      const io = new MemoryBackupTextIo();
+      const token = makeToken('snapshot', 'synthetic');
+      const group = new TokenGroup('snapshot-group', 'Original');
+      TokenGroupStore.getInstance().state.groups = [group];
+      const backup = new TokenBackup(1, [token]);
+      token.TokenName = 'Changed';
+      group.name = 'Changed';
+      await saveBackupToFile('synthetic.bak', backup, false, '', io);
+      TokenGroupStore.getInstance().state.groups = [];
+      const source = await readLocalBackupSource('synthetic.bak', io);
+      const prepared = await source.prepare();
+      expect(TokenGroupStore.getInstance().state.groups.length).assertEqual(0);
+      const snapshot = prepared.takeForCommit();
+      expect(snapshot.configs[0].TokenName).assertEqual('Name');
+      expect(snapshot.groups[0].name).assertEqual('Original');
+      source.dispose();
     });
 
     it('restore_missing_file_rejects', 0, async () => {

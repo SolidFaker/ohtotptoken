@@ -8,9 +8,7 @@
     "common/src/main/ets/utils/CloudSyncTask.ets",
     "common/src/main/ets/utils/CommonConstants.ets",
     "entry/src/main/ets/oath/NfcSessionTokens.ets",
-    "entry/src/main/ets/oath/TagTransport.ets",
-    "entry/src/main/ets/utils/BackupImportOperation.ets",
-    "entry/src/main/ets/utils/TokenBatchOperation.ets"
+    "entry/src/main/ets/oath/TagTransport.ets"
   ],
   "lines": {
     "covered": 3800,

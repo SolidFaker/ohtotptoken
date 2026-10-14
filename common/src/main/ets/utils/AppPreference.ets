@@ -87,6 +87,8 @@ export enum PREF_KEYS {
   DB_RDS_CLOUD_SYNC_ENABLE = 'app_db_rds_cloud_sync_enable',
   /** 云端同步最后时间 */
   CLOUD_SYNC_LAST_TIME = 'app_cloud_sync_last_time',
+  /** 最近一次云备份失败状态（固定枚举结构 JSON，详见 CloudSyncFailureState） */
+  CLOUD_SYNC_LAST_FAILURE = 'app_cloud_sync_last_failure',
   /** KV数据库同步时间 */
   DB_KV_SYNC_TIME = 'app_db_kv_sync_time',
   /** 选中的图标包（已废弃，仅用于迁移） */
@@ -541,6 +543,7 @@ export class AppPreference {
     [PREF_KEYS.DB_RDS_CLOUD_SYNC_ENABLE, false],
     // 云端同步最后时间
     [PREF_KEYS.CLOUD_SYNC_LAST_TIME, '0'],
+    [PREF_KEYS.CLOUD_SYNC_LAST_FAILURE, ''],
     // 数据库是否启用跨设备流转
     [PREF_KEYS.DB_RDS_SYNC_ENABLE, false],
     // kv数据库同步时间

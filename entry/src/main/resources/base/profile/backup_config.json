@@ -17,5 +17,19 @@
     "data/storage/el5/base/preferences/",
     "data/storage/el5/base/haps/*/files/",
     "data/storage/el5/base/haps/*/preferences/"
+  ],
+  "excludes": [
+    "data/storage/el1/base/files/.cloud-backup-journal/",
+    "data/storage/el1/base/haps/*/files/.cloud-backup-journal/",
+    "data/storage/el1/base/files/.cloud-backup-publications/",
+    "data/storage/el1/base/haps/*/files/.cloud-backup-publications/",
+    "data/storage/el2/base/files/.cloud-backup-journal/",
+    "data/storage/el2/base/haps/*/files/.cloud-backup-journal/",
+    "data/storage/el2/base/files/.cloud-backup-publications/",
+    "data/storage/el2/base/haps/*/files/.cloud-backup-publications/",
+    "data/storage/el5/base/files/.cloud-backup-journal/",
+    "data/storage/el5/base/haps/*/files/.cloud-backup-journal/",
+    "data/storage/el5/base/files/.cloud-backup-publications/",
+    "data/storage/el5/base/haps/*/files/.cloud-backup-publications/"
   ]
 }

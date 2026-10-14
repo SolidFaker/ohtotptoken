@@ -6,6 +6,7 @@
   "author": "",
   "license": "",
   "dependencies": {
+    "@ohos/jszip": "^1.0.1",
     "common": "file:../common",
     "uikit": "file:../uikit"
   },

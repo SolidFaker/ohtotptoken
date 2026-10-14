@@ -1,16 +1,20 @@
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import { cloudSync, fileUri } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
-import { zlib } from '@kit.BasicServicesKit';
+import { BusinessError, zlib } from '@kit.BasicServicesKit';
+import { CloudFileCacher, CloudFileCacheLoader, prepareCloudFileRead } from './CloudFileCacheLoader';
+import { CloudBackupOperationGate, CloudBackupOperationKind, CloudBackupOperationLease } from './CloudBackupOperationGate';
+import { CloudBackupSyncService } from './CloudBackupSyncService';
+import {
+  CloudBackupDiagnostics, DiagnosticArtifact, DiagnosticContext, DiagnosticErrorDomain,
+  DiagnosticKind, DiagnosticReason, DiagnosticResult, DiagnosticStage,
+} from './CloudBackupDiagnostics';
 import { AppPreference, PREF_KEYS, BUILTIN_DEFAULT_PACK_ID, EVENT_NAMES } from './AppPreference';
 import { TokenIconPacks, AegisIconPack } from './TokenUtils';
 import { SyncTimeHelper } from './SyncTimeHelper';
 import { HuaweiAccountManager } from './HuaweiAccountManager';
 import { DeviceInfoHelper } from './DeviceInfoHelper';
-import { FsGateway, FileIoFsGateway } from './StoragePorts';
+import { FsGateway, FileIoFsGateway, FsStatInfo } from './StoragePorts';
+import { IconPackPublication, IconPackCloudSnapshot } from './IconPackPublication';
 
-const TAG = 'IconPackCloudBackup';
-const DOMAIN = 0xFF00;
 const ICON_PACK_BACKUP_ZIP = 'icon_packs_backup.zip';
 const META_JSON_NAME = 'icon_packs_meta.json';
 /**
@@ -125,14 +129,22 @@ class TokenIconPacksRegistry implements IconPackRegistry {
 }
 
 /** LocalUnit 测试注入项（目录就绪时跳过 init() 的 AppStorage 依赖）。 */
+export interface IconPackSyncStarter {
+  /** 仅表示同步提交被接受，不表示远端已经完成。 */
+  start(): Promise<boolean>;
+}
+
 export interface IconPackBackupTestDeps {
   fs?: FsGateway;
+  cache?: CloudFileCacher;
+  sync?: IconPackSyncStarter;
   archiver?: IconPackArchiver;
   device?: IconPackDevicePort;
   registry?: IconPackRegistry;
   filesDir?: string;
   cloudDir?: string;
   cacheDir?: string;
+  tempDir?: string;
 }
 
 /**
@@ -161,11 +173,27 @@ export enum IconPackSyncState {
 
 export class IconPackRestoreResult {
   restoredCount: number = 0;
+  /** 实际拷贝落地的文件数（不再硬编码）。 */
   restoredFiles: number = 0;
+  /** 文件拷贝失败数；注册表加载/删除、元数据读取或临时清理失败各记一次。
+   * 非 0 表示恢复不完整，不得推进同步水位或被调用方当作完整成功。 */
+  failedFiles: number = 0;
+}
+
+/** 目录递归拷贝的结果计数；failed > 0 表示收集不完整，不得宣称完整备份。 */
+class IconPackDirCopyResult {
+  copied: number = 0;
+  failed: number = 0;
 }
 
 export class IconPackBackupStatus {
   exists: boolean = false;
+  /** 为 false 时 packCount 的默认值不是已知的远端数量。 */
+  metadataKnown: boolean = false;
+  /** 发布记录未收敛或无法验证；不得显示为“从未备份”。 */
+  publicationUnresolved: boolean = false;
+  /** 伴生元数据文件确定不存在（无内容短路从未写出），是确定状态而非读取失败。 */
+  metadataAbsent: boolean = false;
   packCount: number = 0;
   size: number = 0;
   lastTime: string = '';
@@ -207,6 +235,23 @@ class SyncMetaRecord {
   packs: PackMetaEntry[] = [];
 }
 
+/** 显式传递上下文，不使用可变的全局“当前操作”。 */
+class IconPackOperation {
+  lease: CloudBackupOperationLease;
+  ownLease: boolean;
+  context: DiagnosticContext;
+  ownContext: boolean;
+  unknownIo: boolean = false;
+
+  constructor(lease: CloudBackupOperationLease, ownLease: boolean,
+    context: DiagnosticContext, ownContext: boolean) {
+    this.lease = lease;
+    this.ownLease = ownLease;
+    this.context = context;
+    this.ownContext = ownContext;
+  }
+}
+
 /**
  * 图标包云备份/恢复管理器（单例）
  *
@@ -215,8 +260,9 @@ class SyncMetaRecord {
  * 2. 从云端下载 zip，解压并合并到本地 filesDir
  * 3. 管理 enabledPacks 列表的云端同步（随 token 备份一起序列化）
  *
- * 线程安全：ArkTS 单线程事件循环，通过 IconPackSyncState 状态机保证操作互斥，
- * 不需要真正的锁。所有公开异步方法在入口处 tryTransition，在 finally 中回到 IDLE。
+ * 线程安全：共享 gate 覆盖令牌与图标 I/O，本地 IconPackSyncState 防止同许可重入。
+ * 独立入口取得许可后才初始化；嵌套入口复用合法所有者，finally 不释放外层许可。
+ * 取消未确认时状态回到 IDLE 结束 loading，但 gate 保留至原所有者显式排空。
  *
  * 状态机生命周期：纯内存态，不持久化。应用重启后 singleton 重建，自动恢复 IDLE。
  *
@@ -230,7 +276,9 @@ export class IconPackCloudBackup {
   private cloudDir: string = '';
   private filesDir: string = '';
   private cacheDir: string = '';
-  private fileSync: cloudSync.FileSync | null = null;
+  private tempDir: string = '';
+  private pendingCleanupLease: CloudBackupOperationLease | undefined = undefined;
+  private cleanupRetryRunning: boolean = false;
   /** 状态机当前状态，纯内存态，重启自动重置 */
   private syncState: IconPackSyncState = IconPackSyncState.IDLE;
   private testDeps: IconPackBackupTestDeps | null = null;
@@ -256,47 +304,63 @@ export class IconPackCloudBackup {
       this.cloudDir = deps.cloudDir !== undefined ? deps.cloudDir : this.cloudDir;
       this.filesDir = deps.filesDir !== undefined ? deps.filesDir : this.filesDir;
       this.cacheDir = deps.cacheDir !== undefined ? deps.cacheDir : this.cacheDir;
+      this.tempDir = deps.tempDir !== undefined ? deps.tempDir : this.cacheDir;
     }
   }
 
   /** 重置测试注入（恢复生产端口与未初始化状态）。 */
   resetForTest(): void {
+    if (this.testDeps !== null && this.pendingCleanupLease !== undefined) {
+      this.pendingCleanupLease.resolveUnknownIo();
+      this.pendingCleanupLease.release();
+    }
+    this.pendingCleanupLease = undefined;
+    this.cleanupRetryRunning = false;
     this.testDeps = null;
     this.context = undefined;
     this.cloudDir = '';
     this.filesDir = '';
     this.cacheDir = '';
+    this.tempDir = '';
     this.syncState = IconPackSyncState.IDLE;
   }
 
   private get fs(): FsGateway {
-    return this.testDeps?.fs !== undefined ? this.testDeps.fs : this.productionFs;
+    if (this.testDeps === null) return this.productionFs;
+    if (this.testDeps.fs === undefined) throw new Error('Icon file dependency unavailable');
+    return this.testDeps.fs;
   }
 
   private get archiver(): IconPackArchiver {
-    return this.testDeps?.archiver !== undefined ? this.testDeps.archiver : new ZlibIconPackArchiver();
+    if (this.testDeps === null) return new ZlibIconPackArchiver();
+    if (this.testDeps.archiver === undefined) throw new Error('Icon archive dependency unavailable');
+    return this.testDeps.archiver;
   }
 
   private get devicePort(): IconPackDevicePort {
-    return this.testDeps?.device !== undefined ? this.testDeps.device : new DeviceInfoAdapter();
+    if (this.testDeps === null) return new DeviceInfoAdapter();
+    if (this.testDeps.device === undefined) throw new Error('Icon device dependency unavailable');
+    return this.testDeps.device;
   }
 
   private get registry(): IconPackRegistry {
-    return this.testDeps?.registry !== undefined ? this.testDeps.registry : this.productionRegistry;
+    if (this.testDeps === null) return this.productionRegistry;
+    if (this.testDeps.registry === undefined) throw new Error('Icon registry dependency unavailable');
+    return this.testDeps.registry;
   }
 
   async init(): Promise<void> {
-    if (this.context) {
+    if (this.context || this.testDeps !== null) {
       return;
     }
     this.context = AppStorage.get<common.UIAbilityContext>('appContext') as common.UIAbilityContext;
     if (!this.context) {
-      hilog.error(DOMAIN, TAG, 'init: failed to get appContext');
       return;
     }
     this.filesDir = this.context.filesDir;
     this.cloudDir = this.context.cloudFileDir;
     this.cacheDir = this.context.cacheDir;
+    this.tempDir = this.context.tempDir;
   }
 
   /**
@@ -306,73 +370,88 @@ export class IconPackCloudBackup {
    * 直接调用 doCheckCloudBackupNewer/doRestoreIconPacks（私有方法，不经过状态检查），
    * 因为整个 check+restore 已在 RESTORING 状态保护下作为原子操作执行。
    */
-  async checkAndAutoRestore(): Promise<boolean> {
-    await this.init();
-    if (!this.context || !this.cloudDir) return false;
-
-    if (!this.tryTransition(IconPackSyncState.RESTORING)) {
-      hilog.warn(DOMAIN, TAG, `checkAndAutoRestore: state=${this.syncState}, skip`);
-      return false;
-    }
+  async checkAndAutoRestore(owner?: CloudBackupOperationLease, ctx?: DiagnosticContext): Promise<boolean> {
+    const operation = this.beginOperation(IconPackSyncState.RESTORING, owner, ctx);
+    if (operation === undefined) return false;
     try {
+      if (!await this.prepareContext(operation.context)) return false;
       const enabled = AppPreference.getPreference(PREF_KEYS.APPEARANCE_HUAWEI_CLOUD_SYNC_ENABLE) as boolean;
       if (!enabled) return false;
       if (!HuaweiAccountManager.getInstance().userLogin) return false;
 
-      if (!await this.doCheckCloudBackupNewer()) return false;
+      if (!await this.doCheckCloudBackupNewer(operation)) return false;
 
-      const result = await this.doRestoreIconPacks();
+      const result = await this.doRestoreIconPacks(operation);
       if (result.restoredCount > 0 || result.restoredFiles > 0) {
-        this.context.eventHub?.emit(EVENT_NAMES.ICON_PACK_CHANGED);
+        this.context?.eventHub?.emit(EVENT_NAMES.ICON_PACK_CHANGED);
       }
+      // 部分落地仍可刷新图标，但失败必须被消费，不能误报完整恢复并阻断同版本重试。
+      if (result.failedFiles > 0) return false;
       return result.restoredCount > 0 || result.restoredFiles > 0;
+    } catch (error) {
+      CloudBackupDiagnostics.fail(operation.context, DiagnosticStage.ICON_IO, DiagnosticErrorDomain.APP, error);
+      return false;
     } finally {
-      this.syncState = IconPackSyncState.IDLE;
+      this.finishOperation(operation);
     }
   }
 
   /**
-   * 备份图标包到云端（由 CloudBackupManager.backupToCloud 在 token 备份成功后 fire-and-forget 调用）
+   * 备份图标包到云端；管理器等待图标操作完成，复用许可并在最后统一提交同步。
    *
    * 流程：IDLE→BACKING_UP → 检查本地是否有图标包 → 拷贝到 staging → 压缩 zip →
    *       复制到 cloudDir → FileSync.start() → IDLE
    */
-  async backupIconPacks(): Promise<boolean> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      return false;
-    }
-    if (!this.tryTransition(IconPackSyncState.BACKING_UP)) {
-      hilog.warn(DOMAIN, TAG, `backupIconPacks: state=${this.syncState}, skip`);
-      return false;
-    }
+  async backupIconPacks(owner?: CloudBackupOperationLease, deferSync: boolean = false,
+    ctx?: DiagnosticContext): Promise<boolean> {
+    const operation = this.beginOperation(IconPackSyncState.BACKING_UP, owner, ctx);
+    if (operation === undefined) return false;
     try {
-      return await this.doBackupIconPacks();
+      if (!await this.prepareContext(operation.context)) return false;
+      return await this.doBackupIconPacks(operation, deferSync);
+    } catch (error) {
+      CloudBackupDiagnostics.fail(operation.context, DiagnosticStage.ICON_IO, DiagnosticErrorDomain.APP, error);
+      return false;
     } finally {
-      this.syncState = IconPackSyncState.IDLE;
+      this.finishOperation(operation);
     }
   }
 
-  /** 实际备份逻辑：staging 目录构建 → zip 压缩 → 复制到 cloudDir → 触发同步 */
-  private async doBackupIconPacks(): Promise<boolean> {
+  /** tempDir 收集／压缩，云端独占新代校验并提交；不移动或覆盖任何现有云备份。 */
+  private async doBackupIconPacks(operation: IconPackOperation, deferSync: boolean): Promise<boolean> {
     const iconPackDir = this.filesDir + '/icon_packs';
     const userIconDir = this.filesDir + '/user_icons';
     let hasContent = false;
+    let listingFailed = false;
 
     try {
       const packFiles = await this.fs.listFiles(iconPackDir);
       if (packFiles.length > 0) hasContent = true;
-    } catch (_) {}
+    } catch (error) {
+      // 目录确实不存在视为无内容；其他列举失败不得当作"无内容"跳过——那是假成功。
+      if (!this.isMissingFile(error)) listingFailed = true;
+    }
 
     try {
       const userFiles = await this.fs.listFiles(userIconDir);
       if (userFiles.length > 0) hasContent = true;
-    } catch (_) {}
+    } catch (error) {
+      if (!this.isMissingFile(error)) listingFailed = true;
+    }
+
+    if (listingFailed) {
+      CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.ICON_IO, DiagnosticResult.FAIL,
+        { artifact: DiagnosticArtifact.ICON, reason: DiagnosticReason.IO_ERROR });
+      return false;
+    }
 
     if (!hasContent) {
-      hilog.info(DOMAIN, TAG, 'backupIconPacks: no icon packs to backup, skip');
+      CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.ICON_IO, DiagnosticResult.OK,
+        { artifact: DiagnosticArtifact.ICON });
       return true;
     }
+
+    const publication = this.publication(operation);
 
     const now = Date.now();
     const packEntries: PackMetaEntry[] = [];
@@ -391,13 +470,13 @@ export class IconPackCloudBackup {
     meta.deletedPacks = [];
     meta.packs = packEntries;
 
-    const stagingDir = this.cacheDir + '/icon_pack_staging';
+    const stagingDir = this.tempDir + '/icon_pack_staging';
     const metaPath = stagingDir + '/' + META_JSON_NAME;
-    const tempZipPath = this.cacheDir + '/' + ICON_PACK_BACKUP_ZIP;
-
+    const tempZipPath = this.tempDir + '/' + ICON_PACK_BACKUP_ZIP;
+    let completed = false;
     try {
-      // 1. 清理并创建 staging 目录（防止上次中断残留旧文件污染本次备份）
-      await this.removeDirRecursive(stagingDir);
+      // 1. 清理并创建专用 cache staging 目录；清理失败不能混入旧产物继续发布。
+      if (!await this.removeDirRecursive(stagingDir, operation.context)) return false;
       try {
         await this.fs.makeDir(stagingDir);
       } catch (_) {}
@@ -405,101 +484,149 @@ export class IconPackCloudBackup {
       // 2. 写入元数据文件
       await this.fs.writeTextFile(metaPath, JSON.stringify(meta));
 
-      // 3. 递归拷贝 icon_packs 和 user_icons 到 staging（fs.copyFile 不支持目录）
-      try {
-        const destIconDir = stagingDir + '/icon_packs';
-        try {
-          await this.fs.makeDir(destIconDir);
-        } catch (_) {}
-        await this.copyDirRecursive(iconPackDir, destIconDir);
-      } catch (_) {}
-      try {
-        const destUserDir = stagingDir + '/user_icons';
-        try {
-          await this.fs.makeDir(destUserDir);
-        } catch (_) {}
-        await this.copyDirRecursive(userIconDir, destUserDir);
-      } catch (_) {}
+      // 3. 递归拷贝 icon_packs 和 user_icons 到 staging（fs.copyFile 不支持目录）；
+      //    任一文件失败都使本次备份失败，不得缺文件仍宣称成功。
+      const iconCopy = await this.copyDirInto(iconPackDir, stagingDir + '/icon_packs', operation.context);
+      const userCopy = await this.copyDirInto(userIconDir, stagingDir + '/user_icons', operation.context);
+      if (iconCopy.failed + userCopy.failed > 0) {
+        CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.ICON_IO, DiagnosticResult.FAIL,
+          { artifact: DiagnosticArtifact.ICON, reason: DiagnosticReason.PARTIAL_FAILURE });
+        return false;
+      }
 
       // 4. 压缩 staging 目录为 zip
       await this.archiver.compress(stagingDir, tempZipPath);
 
-      // 5. 将 zip 复制到 cloudDir
-      const cloudZipPath = this.cloudDir + '/' + ICON_PACK_BACKUP_ZIP;
-      await this.fs.copyFile(tempZipPath, cloudZipPath);
-
-      // 6. 写入伴生元数据文件（~1-2KB，含设备信息、时间戳、图标包列表）
       const syncMeta = new SyncMetaRecord();
       syncMeta.version = 1;
       syncMeta.timestamp = now;
       syncMeta.deviceId = this.devicePort.deviceId();
       syncMeta.deviceName = this.devicePort.deviceName();
-      syncMeta.enabledPacks = this.registry.getEnabledPacks();
-      syncMeta.deletedPacks = [];
+      syncMeta.enabledPacks = meta.enabledPacks;
+      syncMeta.deletedPacks = meta.deletedPacks;
       syncMeta.packs = packEntries;
-      const syncMetaPath = this.cloudDir + '/' + SYNC_META_FILE;
-      await this.fs.writeTextFile(syncMetaPath, JSON.stringify(syncMeta));
+      const syncMetadata = JSON.stringify(syncMeta);
 
-      // 7. 触发云端同步（zip + 伴生文件一起上传）
-      await this.syncToCloud();
-
-      AppPreference.setPreference(PREF_KEYS.ICON_PACK_CLOUD_SYNC_TIME, `${now}`);
-      hilog.info(DOMAIN, TAG, `backupIconPacks: completed, timestamp=${now}`);
-      return true;
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `backupIconPacks: error=${JSON.stringify(e)}`);
-      return false;
+      // tempDir 中的可再生产物丢失只让本次失败；旧代的保留不依赖系统临时目录。
+      if (!await this.verifyStagedZip(tempZipPath, operation, syncMetadata)) return false;
+      if (!await publication.publish(tempZipPath, syncMetadata)) return false;
+      completed = true;
+    } catch (error) {
+      this.reportFsFailure(operation.context, DiagnosticStage.ICON_IO, error);
     } finally {
-      await this.removeDirRecursive(stagingDir);
-      try {
-        await this.fs.deleteFile(tempZipPath);
-      } catch (_) {}
+      const stagingCleaned = await this.removeDirRecursive(stagingDir, operation.context);
+      const tempCleaned = await this.removeTemporaryFile(tempZipPath, operation.context);
+      // 已提交云端代不属于临时产物；失败／同步拒绝不从 finally 删除任何已提交代。
+      if (!stagingCleaned || !tempCleaned) completed = false;
     }
+    if (!completed) return false;
+
+    // 临时产物清理也必须成功，之后才提交同步及推进成功水位。
+    if (!deferSync && !await this.syncToCloud(operation.context)) return false;
+    AppPreference.setPreference(PREF_KEYS.ICON_PACK_CLOUD_SYNC_TIME, `${now}`);
+    CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.ICON_IO, DiagnosticResult.OK,
+      { artifact: DiagnosticArtifact.ICON });
+    return true;
+  }
+
+  /** makeDir + 递归拷贝的组合步骤；目标父目录创建失败由逐文件失败计数兜底。 */
+  private async copyDirInto(srcDir: string, destDir: string,
+    ctx: DiagnosticContext): Promise<IconPackDirCopyResult> {
+    try {
+      await this.fs.makeDir(destDir);
+    } catch (_) {}
+    return this.copyDirRecursive(srcDir, destDir, ctx);
+  }
+
+  private publication(operation: IconPackOperation): IconPackPublication {
+    return new IconPackPublication(this.fs, this.cloudDir, operation.context,
+      async (path: string, metadata: string): Promise<boolean> => {
+        const stat = await this.fs.stat(path);
+        if (stat.location === 2) await this.cacheFile(path, operation);
+        return this.verifyStagedZip(path, operation, metadata);
+      },
+      async (path: string): Promise<void> => {
+        const stat = await this.fs.stat(path);
+        if (stat.location === 2) await this.cacheFile(path, operation);
+      });
+  }
+
+  private async readableSnapshot(operation: IconPackOperation): Promise<IconPackCloudSnapshot | undefined> {
+    return this.publication(operation).snapshot();
+  }
+
+  /** 完整试读并核对内部元数据与同代伴生元数据；tempDir 可被回收，异常即失败。 */
+  private async verifyStagedZip(stagedZipPath: string, operation: IconPackOperation,
+    expectedMetadata: string): Promise<boolean> {
+    const verifyDir = this.tempDir + '/icon_pack_publish_verify';
+    let verified = false;
+    try {
+      if (!await this.removeDirRecursive(verifyDir, operation.context)) return false;
+      try {
+        await this.fs.makeDir(verifyDir);
+      } catch (_) {}
+      await this.archiver.decompress(stagedZipPath, verifyDir);
+      const metaContent = await this.fs.readTextFile(verifyDir + '/' + META_JSON_NAME);
+      const meta = JSON.parse(metaContent) as IconPackMetaRecord;
+      const expected = JSON.parse(expectedMetadata) as SyncMetaRecord;
+      if (meta === null || typeof meta !== 'object' || meta.version !== 1 ||
+        meta.timestamp !== expected.timestamp || JSON.stringify(meta.packs) !== JSON.stringify(expected.packs) ||
+        JSON.stringify(meta.enabledPacks) !== JSON.stringify(expected.enabledPacks) ||
+        JSON.stringify(meta.deletedPacks) !== JSON.stringify(expected.deletedPacks)) {
+        throw new Error('ICON_PACK_META_INVALID');
+      }
+      verified = true;
+    } catch (error) {
+      this.reportFsFailure(operation.context, DiagnosticStage.ICON_IO, error);
+    } finally {
+      if (!await this.removeDirRecursive(verifyDir, operation.context)) verified = false;
+    }
+    return verified;
   }
 
   /**
    * 检查云端备份是否比本地更新（公开入口，外部可独立调用）
    * 内部先做 5 分钟去抖，再读取伴生元数据文件比较时间戳（不解压 zip）。
    */
-  async checkCloudBackupNewer(): Promise<boolean> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      return false;
-    }
-    if (!this.tryTransition(IconPackSyncState.CHECKING)) {
-      hilog.warn(DOMAIN, TAG, `checkCloudBackupNewer: state=${this.syncState}, skip`);
-      return false;
-    }
+  async checkCloudBackupNewer(owner?: CloudBackupOperationLease, ctx?: DiagnosticContext): Promise<boolean> {
+    const operation = this.beginOperation(IconPackSyncState.CHECKING, owner, ctx);
+    if (operation === undefined) return false;
     try {
-      return await this.doCheckCloudBackupNewer();
+      if (!await this.prepareContext(operation.context)) return false;
+      return await this.doCheckCloudBackupNewer(operation);
+    } catch (error) {
+      CloudBackupDiagnostics.fail(operation.context, DiagnosticStage.ICON_IO, DiagnosticErrorDomain.APP, error);
+      return false;
     } finally {
-      this.syncState = IconPackSyncState.IDLE;
+      this.finishOperation(operation);
     }
   }
 
   /** 读取云端伴生元数据文件比较 timestamp，无需下载/解压 zip */
-  private async doCheckCloudBackupNewer(): Promise<boolean> {
+  private async doCheckCloudBackupNewer(operation: IconPackOperation): Promise<boolean> {
     const lastRestoreStr = AppPreference.getPreference(PREF_KEYS.ICON_PACK_CLOUD_SYNC_TIME) as string;
     const lastRestoreTs = SyncTimeHelper.parseStoredTimestamp(lastRestoreStr);
     if (lastRestoreTs > 0 && SyncTimeHelper.isWithinMinutes(lastRestoreTs, 5)) {
-      hilog.info(DOMAIN, TAG, 'checkCloudBackupNewer: restored within 5 min, skip');
       return false;
     }
 
-    const syncMetaPath = this.cloudDir + '/' + SYNC_META_FILE;
+    const snapshot = await this.readableSnapshot(operation);
+    if (snapshot === undefined || snapshot.metaPath.length === 0) return false;
+    const syncMetaPath = snapshot.metaPath;
     try {
       const stat = await this.fs.stat(syncMetaPath);
       if (stat.location === 2) {
-        await this.cacheFile(syncMetaPath);
+        await this.cacheFile(syncMetaPath, operation);
       }
 
       const content = await this.fs.readTextFile(syncMetaPath);
       const meta = JSON.parse(content) as SyncMetaRecord;
       const cloudTs = meta.timestamp || 0;
-      hilog.info(DOMAIN, TAG, `checkCloudBackupNewer: cloudTs=${cloudTs}, localTs=${lastRestoreTs}, device=${meta.deviceName}`);
+      CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.READ_END, DiagnosticResult.OK,
+        { headerParsed: true });
       return cloudTs > lastRestoreTs;
-    } catch (e) {
-      hilog.info(DOMAIN, TAG, `checkCloudBackupNewer: no sync meta or error=${JSON.stringify(e)}`);
+    } catch (error) {
+      this.reportFsFailure(operation.context, DiagnosticStage.READ_END, error);
       return false;
     }
   }
@@ -510,118 +637,127 @@ export class IconPackCloudBackup {
    * 流程：IDLE→RESTORING → 下载解压 → 拷贝到 filesDir → 处理 deletedPacks →
    *       刷新内存状态 → 合并 enabledPacks → IDLE
    */
-  async restoreIconPacks(): Promise<IconPackRestoreResult> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      return new IconPackRestoreResult();
-    }
-    if (!this.tryTransition(IconPackSyncState.RESTORING)) {
-      hilog.warn(DOMAIN, TAG, `restoreIconPacks: state=${this.syncState}, skip`);
-      return new IconPackRestoreResult();
-    }
+  async restoreIconPacks(owner?: CloudBackupOperationLease, ctx?: DiagnosticContext): Promise<IconPackRestoreResult> {
+    const operation = this.beginOperation(IconPackSyncState.RESTORING, owner, ctx);
+    if (operation === undefined) return new IconPackRestoreResult();
     try {
-      return await this.doRestoreIconPacks();
+      if (!await this.prepareContext(operation.context)) return new IconPackRestoreResult();
+      return await this.doRestoreIconPacks(operation);
+    } catch (error) {
+      CloudBackupDiagnostics.fail(operation.context, DiagnosticStage.ICON_IO, DiagnosticErrorDomain.APP, error);
+      return new IconPackRestoreResult();
     } finally {
-      this.syncState = IconPackSyncState.IDLE;
+      this.finishOperation(operation);
     }
   }
 
   /** 实际恢复逻辑：解压 → 拷贝文件 → 处理已删除包 → 刷新内存 → 合并启用列表 */
-  private async doRestoreIconPacks(): Promise<IconPackRestoreResult> {
-    const cloudZipPath = this.cloudDir + '/' + ICON_PACK_BACKUP_ZIP;
+  private async doRestoreIconPacks(operation: IconPackOperation): Promise<IconPackRestoreResult> {
+    const result = new IconPackRestoreResult();
+    const snapshot = await this.readableSnapshot(operation);
+    if (snapshot === undefined) {
+      result.failedFiles++;
+      return result;
+    }
+    const cloudZipPath = snapshot.zipPath;
+    const tempDir = this.tempDir + '/icon_pack_restore';
+    let restoreDirUsed = false;
+    let meta: IconPackMetaRecord | null = null;
     try {
-      // 若文件仍在云端（location=2），先缓存到本地
+      // 云端文件可选预缓存；确认无在途任务后仍须由解压读取验证实际可用性。
       const stat = await this.fs.stat(cloudZipPath);
       if (stat.location === 2) {
-        await this.cacheFile(cloudZipPath);
+        await this.cacheFile(cloudZipPath, operation);
       }
 
-      // 解压到临时目录（cacheDir，不直接写 filesDir）
-      const tempDir = this.cacheDir + '/icon_pack_restore';
+      // 仅清理专用 cache 临时目录，不把上次解压残留当作当前 zip 的内容。
+      if (!await this.removeDirRecursive(tempDir, operation.context)) {
+        // 本次尚未解压，失败只记一项；finally 不重复清理/计数，下次操作可重试。
+        result.failedFiles++;
+        return result;
+      }
+      restoreDirUsed = true;
       try {
         await this.fs.makeDir(tempDir);
       } catch (_) {}
-
       await this.archiver.decompress(cloudZipPath, tempDir);
 
-      // 确保目标目录存在
+      // 选择性拷贝：缺少整个可选子目录仍兼容旧 zip；逐文件失败必须保留在结果内。
       const iconPackDir = this.filesDir + '/icon_packs';
       const userIconDir = this.filesDir + '/user_icons';
-      try {
-        await this.fs.makeDir(iconPackDir);
-      } catch (_) {}
-      try {
-        await this.fs.makeDir(userIconDir);
-      } catch (_) {}
+      const iconCopy = await this.copyDirInto(tempDir + '/icon_packs', iconPackDir, operation.context);
+      const userCopy = await this.copyDirInto(tempDir + '/user_icons', userIconDir, operation.context);
+      result.restoredFiles = iconCopy.copied + userCopy.copied;
+      result.failedFiles += iconCopy.failed + userCopy.failed;
 
-      // 选择性拷贝：只还原 icon_packs 和 user_icons 子目录
-      const tempIconPacks = tempDir + '/icon_packs';
-      const tempUserIcons = tempDir + '/user_icons';
-      try {
-        await this.copyDirRecursive(tempIconPacks, iconPackDir);
-      } catch (_) {}
-      try {
-        await this.copyDirRecursive(tempUserIcons, userIconDir);
-      } catch (_) {}
-
-      // 读取元数据
-      let meta: IconPackMetaRecord | null = null;
+      // 旧 zip 确定无 meta 仍允许文件恢复，不新增格式拒绝；真实读取/解析失败不假成功。
       try {
         const metaContent = await this.fs.readTextFile(tempDir + '/' + META_JSON_NAME);
         meta = JSON.parse(metaContent) as IconPackMetaRecord;
-      } catch (_) {}
-
-      // 清理临时目录
-      await this.removeDirRecursive(tempDir);
+      } catch (error) {
+        if (!this.isMissingFile(error)) {
+          result.failedFiles++;
+          this.reportFsFailure(operation.context, DiagnosticStage.ICON_IO, error);
+        }
+      }
 
       if (meta) {
-        // 处理云端标记为已删除的图标包
+        result.restoredCount = meta.packs?.length ?? 0;
         if (meta.deletedPacks && meta.deletedPacks.length > 0) {
           for (const deletedUuid of meta.deletedPacks) {
             const pack = this.registry.listPacks().find(p => p.uuid === deletedUuid);
             if (pack) {
               try {
                 await this.registry.removePack(pack);
-              } catch (e) {
-                hilog.warn(DOMAIN, TAG, `restoreIconPacks: failed to delete pack ${deletedUuid}: ${JSON.stringify(e)}`);
+              } catch (error) {
+                result.failedFiles++;
+                this.reportFsFailure(operation.context, DiagnosticStage.ICON_IO, error);
               }
             }
           }
         }
 
-        // 在 merge 前重新从磁盘加载图标包，使注册表内存状态包含新拷贝的文件
-        await this.refreshIconPackState();
-
-        // 合并策略：以云端 enabledPacks 为基础，追加本地独有的包（不丢失本地新增包）
+        // 重载/删除失败会影响完整性；继续刷新已成功的文件，但不得推进成功水位。
+        result.failedFiles += await this.refreshIconPackState(operation.context);
         const localPacks = this.registry.listPacks().map(p => p.uuid);
         const merged = mergeEnabledPacks(meta.enabledPacks, localPacks);
-
         this.registry.setEnabledPacks(merged);
         AppPreference.saveEnabledPacks(merged);
-        AppPreference.setPreference(PREF_KEYS.ICON_PACK_CLOUD_SYNC_TIME, `${meta.timestamp}`);
-
-        hilog.info(DOMAIN, TAG, `restoreIconPacks: merged enabledPacks=${JSON.stringify(merged)}`);
       }
-
-      const result = new IconPackRestoreResult();
-      result.restoredCount = meta?.packs?.length ?? 0;
-      result.restoredFiles = 1;
-      return result;
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `restoreIconPacks: error=${JSON.stringify(e)}`);
-      return new IconPackRestoreResult();
+    } catch (error) {
+      // 保存已经成功落地的文件计数，供自动入口发事件；异常不再返回伪空成功结果。
+      result.failedFiles++;
+      this.reportFsFailure(operation.context, DiagnosticStage.ICON_IO, error);
+    } finally {
+      if (restoreDirUsed && !await this.removeDirRecursive(tempDir, operation.context)) result.failedFiles++;
     }
+
+    if (result.failedFiles > 0) {
+      CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.ICON_IO, DiagnosticResult.FAIL,
+        { artifact: DiagnosticArtifact.ICON, reason: DiagnosticReason.PARTIAL_FAILURE });
+    } else {
+      // 必须在文件/注册表/清理全部成功之后推进；失败去掉后同 timestamp 的 zip 仍可重试。
+      if (meta) AppPreference.setPreference(PREF_KEYS.ICON_PACK_CLOUD_SYNC_TIME, `${meta.timestamp}`);
+      CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.ICON_IO, DiagnosticResult.OK,
+        { artifact: DiagnosticArtifact.ICON });
+    }
+    return result;
   }
 
   /**
    * 从磁盘重新加载图标包到注册表内存（在 merge enabledPacks 前调用）
    * 包含：user_icons 目录 + icon_packs 下所有子目录 + enabled_packs 偏好
    */
-  private async refreshIconPackState(): Promise<void> {
+  private async refreshIconPackState(ctx: DiagnosticContext): Promise<number> {
     const iconPackDir = this.filesDir + '/icon_packs';
     const userIconDir = this.filesDir + '/user_icons';
-
-    await this.registry.loadUserIcons(userIconDir);
+    let failed = 0;
+    try {
+      await this.registry.loadUserIcons(userIconDir);
+    } catch (error) {
+      failed++;
+      this.reportFsFailure(ctx, DiagnosticStage.ICON_IO, error);
+    }
     try {
       const paths = await this.fs.listFiles(iconPackDir);
       for (const path of paths) {
@@ -631,21 +767,41 @@ export class IconPackCloudBackup {
         }
         try {
           await this.registry.addPackFromDevice(fullPath);
-        } catch (err) {
-          hilog.warn(DOMAIN, TAG, `refreshIconPackState: failed to load pack ${path}: ${JSON.stringify(err)}`);
+        } catch (error) {
+          failed++;
+          this.reportFsFailure(ctx, DiagnosticStage.ICON_IO, error);
         }
       }
-    } catch (err) {
-      hilog.warn(DOMAIN, TAG, `refreshIconPackState: failed to list ${iconPackDir}: ${JSON.stringify(err)}`);
+    } catch (error) {
+      failed++;
+      this.reportFsFailure(ctx, DiagnosticStage.ICON_IO, error);
     }
-    this.registry.reloadEnabledPacksFromPreference();
+    try {
+      this.registry.reloadEnabledPacksFromPreference();
+    } catch (error) {
+      failed++;
+      this.reportFsFailure(ctx, DiagnosticStage.ICON_IO, error);
+    }
+    return failed;
   }
 
   /** 查询云端图标包备份状态（是否存在、包数量、大小、来源设备等），供 UI 展示 */
-  async getCloudBackupStatus(): Promise<IconPackBackupStatus> {
-    await this.init();
-    const result = new IconPackBackupStatus();
+  async getCloudBackupStatus(owner?: CloudBackupOperationLease, ctx?: DiagnosticContext): Promise<IconPackBackupStatus> {
+    const operation = this.beginOperation(IconPackSyncState.CHECKING, owner, ctx);
+    if (operation === undefined) return new IconPackBackupStatus();
+    try {
+      if (!await this.prepareContext(operation.context)) return new IconPackBackupStatus();
+      return await this.doGetCloudBackupStatus(operation);
+    } catch (error) {
+      this.reportFsFailure(operation.context, DiagnosticStage.READ_END, error);
+      return new IconPackBackupStatus();
+    } finally {
+      this.finishOperation(operation);
+    }
+  }
 
+  private async doGetCloudBackupStatus(operation: IconPackOperation): Promise<IconPackBackupStatus> {
+    const result = new IconPackBackupStatus();
     const lastTimeStr = AppPreference.getPreference(PREF_KEYS.ICON_PACK_CLOUD_SYNC_TIME) as string;
     const lastTs = SyncTimeHelper.parseStoredTimestamp(lastTimeStr);
     result.lastTime = SyncTimeHelper.formatTimestamp(lastTs);
@@ -654,7 +810,12 @@ export class IconPackCloudBackup {
       return result;
     }
 
-    const cloudZipPath = this.cloudDir + '/' + ICON_PACK_BACKUP_ZIP;
+    const snapshot = await this.readableSnapshot(operation);
+    if (snapshot === undefined) {
+      result.publicationUnresolved = true;
+      return result;
+    }
+    const cloudZipPath = snapshot.zipPath;
     try {
       const stat = await this.fs.stat(cloudZipPath);
       result.exists = true;
@@ -662,52 +823,187 @@ export class IconPackCloudBackup {
     } catch (_) {}
 
     // 从伴生元数据文件读取详细信息（包列表、来源设备等）
-    const syncMetaPath = this.cloudDir + '/' + SYNC_META_FILE;
+    if (snapshot.metaPath.length === 0) {
+      result.metadataAbsent = true;
+      return result;
+    }
+    const syncMetaPath = snapshot.metaPath;
+    // stat 单独判定“确定不存在”：读取/缓存阶段的 ENOENT（如 TOCTOU 被并发删除）仍归未知态。
+    let smStat: FsStatInfo;
     try {
-      const smStat = await this.fs.stat(syncMetaPath);
+      smStat = await this.fs.stat(syncMetaPath);
+    } catch (error) {
+      if (this.isMissingFile(error)) {
+        // 文件确定不存在：备份流程对无图标包内容按设计跳过、从不写出该文件，
+        // 与“文件在但读不了/校验不过”的未知态不同，是可展示的确定“未备份”。
+        // 诊断侧不产生任何行：ICON 批次类只让失败事件可见，成功与确定缺失同为零输出，
+        // 无法仅凭该操作的诊断流区分“已运行且确定缺失”与“未触发”。
+        result.metadataAbsent = true;
+        return result;
+      }
+      this.reportFsFailure(operation.context, DiagnosticStage.READ_END, error);
+      return result;
+    }
+    try {
       if (smStat.location === 2) {
-        await this.cacheFile(syncMetaPath);
+        await this.cacheFile(syncMetaPath, operation);
       }
       const content = await this.fs.readTextFile(syncMetaPath);
       const meta = JSON.parse(content) as SyncMetaRecord;
-      result.packCount = meta.packs?.length ?? 0;
-      result.sourceDeviceId = meta.deviceId ?? '';
-      result.sourceDeviceName = meta.deviceName ?? '';
-      result.packs = meta.packs ?? [];
-    } catch (_) {
-      // 伴生文件不存在（旧版本备份），回退到本地内存
-      result.packCount = this.registry.listPacks().length;
+      if (!this.isValidStatusMeta(meta)) {
+        CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.READ_END, DiagnosticResult.FAIL,
+          { reason: DiagnosticReason.INVALID_FORMAT, headerParsed: false });
+        return result;
+      }
+      result.metadataKnown = true;
+      result.packCount = meta.packs.length;
+      result.sourceDeviceId = typeof meta.deviceId === 'string' ? meta.deviceId : '';
+      result.sourceDeviceName = typeof meta.deviceName === 'string' ? meta.deviceName : '';
+      result.packs = meta.packs;
+      CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.READ_END, DiagnosticResult.OK,
+        { headerParsed: true });
+    } catch (error) {
+      // 远端内容未知不能用本地注册表数量/设备身份替代。
+      this.reportFsFailure(operation.context, DiagnosticStage.READ_END, error);
     }
 
     return result;
   }
 
-  /** 删除云端图标包备份 zip（由 CloudBackupManager 的三个 clear 方法调用） */
-  async clearCloudBackup(): Promise<boolean> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      return false;
+  private isValidStatusMeta(meta: SyncMetaRecord | null): boolean {
+    if (meta === null || typeof meta !== 'object' || !Array.isArray(meta.packs) ||
+      (meta.deviceId !== undefined && typeof meta.deviceId !== 'string') ||
+      (meta.deviceName !== undefined && typeof meta.deviceName !== 'string') ||
+      (meta.timestamp !== undefined && (typeof meta.timestamp !== 'number' || !Number.isFinite(meta.timestamp) ||
+        meta.timestamp < 0))) return false;
+    for (const pack of meta.packs) {
+      if (pack === null || typeof pack !== 'object' || typeof pack.uuid !== 'string' ||
+        typeof pack.name !== 'string' || !Number.isInteger(pack.version) || pack.version < 0 ||
+        !Number.isInteger(pack.iconCount) || pack.iconCount < 0) return false;
     }
-    if (!this.tryTransition(IconPackSyncState.CLEARING)) {
-      hilog.warn(DOMAIN, TAG, `clearCloudBackup: state=${this.syncState}, skip`);
-      return false;
-    }
+    return true;
+  }
+
+  /** 全部范围无需解析归属，也不为删除创建下载；外层可延后统一同步。 */
+  async clearCloudBackup(owner?: CloudBackupOperationLease, deferSync: boolean = false,
+    ctx?: DiagnosticContext): Promise<boolean> {
+    return this.clearWithScope(undefined, owner, deferSync, ctx);
+  }
+
+  /** 设备范围只删除归属已确认的共享图标文件，失败时保留伴生归属证据。 */
+  async clearCloudBackupForDevices(deviceIds: string[], owner?: CloudBackupOperationLease,
+    deferSync: boolean = true, ctx?: DiagnosticContext): Promise<boolean> {
+    return this.clearWithScope(deviceIds, owner, deferSync, ctx);
+  }
+
+  private async clearWithScope(deviceIds: string[] | undefined, owner: CloudBackupOperationLease | undefined,
+    deferSync: boolean, ctx: DiagnosticContext | undefined): Promise<boolean> {
+    const operation = this.beginOperation(IconPackSyncState.CLEARING, owner, ctx);
+    if (operation === undefined) return false;
     try {
-      const cloudZipPath = this.cloudDir + '/' + ICON_PACK_BACKUP_ZIP;
-      try {
-        await this.fs.deleteFile(cloudZipPath);
-      } catch (_) {}
-      try {
-        await this.fs.deleteFile(this.cloudDir + '/' + SYNC_META_FILE);
-      } catch (_) {}
-      await this.syncToCloud();
-      hilog.info(DOMAIN, TAG, 'clearCloudBackup: completed');
+      if (!await this.prepareContext(operation.context)) return false;
+      const files = await this.fs.listFiles(this.cloudDir);
+      // 旧 fixed-name 备份仍按原归属规则清理；新代只在用户明确清理范围时独立逐代删除。
+      const generationCleared = await new IconPackPublication(this.fs, this.cloudDir, operation.context,
+        async (): Promise<boolean> => false).clear(deviceIds);
+      const publicationFiles = [ICON_PACK_BACKUP_ZIP, SYNC_META_FILE];
+      const hasArtifacts = publicationFiles.some((name: string): boolean => files.includes(name));
+      let legacySelected = true;
+      let identityFailed = false;
+      if (deviceIds !== undefined && hasArtifacts) {
+        const sourceId = await this.readSourceDeviceId(operation);
+        identityFailed = sourceId === undefined;
+        legacySelected = sourceId !== undefined && deviceIds.includes(sourceId);
+      }
+
+      let failed = !generationCleared || identityFailed;
+      let removed = false;
+      for (const name of publicationFiles) {
+        if (!legacySelected) break;
+        if (!files.includes(name)) continue;
+        // zip 失败或底层未确认结束时，设备范围不能删除最后的归属证据。
+        if (operation.unknownIo || (deviceIds !== undefined && failed)) break;
+        const deleted = await this.deleteIconFile(`${this.cloudDir}/${name}`, operation);
+        failed = failed || !deleted;
+        removed = removed || deleted;
+      }
+      if (operation.unknownIo || this.cacheCleanupPending()) {
+        this.retainCleanup(operation);
+        // 同步已完成的删除不启动新文件 I/O；未知缓存任务仍由原许可保护。
+        if (removed && !deferSync) await this.syncToCloud(operation.context);
+        return false;
+      }
+      // 有已成功的删除时，即使另一文件失败也提交；deferSync 由管理器统一一次提交。
+      const syncStarted = deferSync || await this.syncToCloud(operation.context);
+      CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.ICON_CLEAR,
+        failed || !syncStarted ? DiagnosticResult.FAIL : DiagnosticResult.OK,
+        { artifact: DiagnosticArtifact.ICON, partialFailure: failed && removed });
+      if (failed || !syncStarted) return false;
+      AppPreference.setPreference(PREF_KEYS.ICON_PACK_CLOUD_SYNC_TIME, '0');
       return true;
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `clearCloudBackup: error=${JSON.stringify(e)}`);
+    } catch (error) {
+      this.reportFsFailure(operation.context, DiagnosticStage.ICON_CLEAR, error);
       return false;
     } finally {
-      this.syncState = IconPackSyncState.IDLE;
+      this.finishOperation(operation);
+    }
+  }
+
+  private async readSourceDeviceId(operation: IconPackOperation): Promise<string | undefined> {
+    const path = `${this.cloudDir}/${SYNC_META_FILE}`;
+    try {
+      const stat = await this.fs.stat(path);
+      if (stat.location === 2) await this.cacheFile(path, operation);
+      const meta = JSON.parse(await this.fs.readTextFile(path)) as SyncMetaRecord | null;
+      if (meta === null || typeof meta !== 'object' || typeof meta.deviceId !== 'string' ||
+        meta.deviceId.trim().length === 0 || meta.deviceId === 'unknown_odid') {
+        CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.ICON_CLEAR, DiagnosticResult.BLOCKED,
+          { artifact: DiagnosticArtifact.ICON, reason: DiagnosticReason.INVALID_FORMAT, headerParsed: false });
+        return undefined;
+      }
+      CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.READ_END, DiagnosticResult.OK,
+        { headerParsed: true });
+      return meta.deviceId;
+    } catch (error) {
+      this.reportFsFailure(operation.context, DiagnosticStage.READ_END, error);
+      return undefined;
+    }
+  }
+
+  private async deleteIconFile(path: string, operation: IconPackOperation): Promise<boolean> {
+    if (!await this.prepareForDelete(path, operation)) return false;
+    CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.ICON_CLEAR, DiagnosticResult.BEGIN,
+      { artifact: DiagnosticArtifact.ICON, unlinkAttempted: true });
+    try {
+      await this.fs.deleteFile(path);
+      return true;
+    } catch (error) {
+      // 只认 SDK 的明确 ENOENT，不能把任意 stat/unlink 异常当作已不存在。
+      if (this.isMissingFile(error)) {
+        CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.ICON_CLEAR, DiagnosticResult.OK,
+          { artifact: DiagnosticArtifact.ICON, unlinkAttempted: true, alreadyAbsent: true });
+        return true;
+      }
+      this.reportFsFailure(operation.context, DiagnosticStage.ICON_CLEAR, error);
+      return false;
+    }
+  }
+
+  /** 只提取 SDK 数字码，白名单映射仍由诊断模块负责；不访问异常文本。 */
+  private reportFsFailure(ctx: DiagnosticContext, stage: DiagnosticStage, error: Object): void {
+    let code: number | undefined = undefined;
+    try {
+      const candidate = (error as BusinessError).code;
+      if (typeof candidate === 'number') code = candidate;
+    } catch (_) {}
+    CloudBackupDiagnostics.fail(ctx, stage, DiagnosticErrorDomain.FS, code);
+  }
+
+  private isMissingFile(error: Object): boolean {
+    try {
+      return (error as BusinessError).code === 13900002;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -725,83 +1021,229 @@ export class IconPackCloudBackup {
     return this.syncState;
   }
 
-  /** 触发 FileSync.start() 将 cloudDir 变更同步到云端（复用实例避免重复创建） */
-  private async syncToCloud(): Promise<void> {
-    // 测试注入下无需真实云同步
-    if (this.testDeps !== null) {
-      return;
+  private beginOperation(state: IconPackSyncState, owner?: CloudBackupOperationLease,
+    ctx?: DiagnosticContext): IconPackOperation | undefined {
+    const context = ctx ?? CloudBackupDiagnostics.begin(DiagnosticKind.ICON);
+    const gate = CloudBackupOperationGate.getInstance();
+    const validOwner = owner === undefined || gate.canUse(owner);
+    const lease = validOwner && this.syncState === IconPackSyncState.IDLE
+      ? (owner ?? gate.tryEnter(CloudBackupOperationKind.ICONS)) : undefined;
+    if (lease === undefined) {
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.ICON_IO, DiagnosticResult.BLOCKED,
+        { artifact: DiagnosticArtifact.ICON, reason: DiagnosticReason.BUSY });
+      if (ctx === undefined) CloudBackupDiagnostics.end(context);
+      return undefined;
     }
+    const operation = new IconPackOperation(lease, owner === undefined, context, ctx === undefined);
+    this.tryTransition(state);
+    if (this.cacheCleanupPending()) {
+      this.retainCleanup(operation);
+      this.finishOperation(operation);
+      return undefined;
+    }
+    CloudBackupDiagnostics.mark(context,
+      state === IconPackSyncState.CLEARING ? DiagnosticStage.ICON_CLEAR : DiagnosticStage.ICON_IO,
+      DiagnosticResult.BEGIN, { artifact: DiagnosticArtifact.ICON });
+    return operation;
+  }
+
+  private async prepareContext(ctx: DiagnosticContext): Promise<boolean> {
+    await this.init();
+    if (this.context && this.cloudDir) return true;
+    CloudBackupDiagnostics.mark(ctx, DiagnosticStage.ICON_IO, DiagnosticResult.FAIL,
+      { artifact: DiagnosticArtifact.ICON, reason: DiagnosticReason.UNAVAILABLE });
+    return false;
+  }
+
+  private finishOperation(operation: IconPackOperation): void {
+    if (operation.unknownIo || operation.lease.isCleanupPending() || this.cacheCleanupPending()) {
+      this.retainCleanup(operation);
+    } else if (operation.ownLease) {
+      operation.lease.release();
+    }
+    this.syncState = IconPackSyncState.IDLE;
+    if (operation.ownContext) CloudBackupDiagnostics.end(operation.context);
+  }
+
+  private get cacher(): CloudFileCacher | undefined {
+    // 注入模式绝不回退到原生缓存单例。
+    return this.testDeps !== null ? this.testDeps.cache : CloudFileCacheLoader.getInstance();
+  }
+
+  private cacheCleanupPending(): boolean {
     try {
-      if (!this.fileSync) {
-        this.fileSync = new cloudSync.FileSync();
+      return this.cacher?.isCleanupPending?.() ?? false;
+    } catch (_) {
+      // 无法确认状态时保持屏障，不能因状态查询异常提前释放许可。
+      return true;
+    }
+  }
+
+  private retainCleanup(operation: IconPackOperation): void {
+    operation.unknownIo = true;
+    operation.lease.retainUnknownIo();
+    if (operation.ownLease) this.pendingCleanupLease = operation.lease;
+    CloudBackupDiagnostics.mark(operation.context, DiagnosticStage.ICON_IO, DiagnosticResult.BLOCKED,
+      { artifact: DiagnosticArtifact.ICON, reason: DiagnosticReason.INFLIGHT_UNCONFIRMED, drained: false });
+  }
+
+  isCleanupPending(): boolean {
+    return this.pendingCleanupLease !== undefined || this.cacheCleanupPending();
+  }
+
+  /** 只由独立图标操作的原所有者重试排空；不重新抢 gate，不重放删除或下载。 */
+  async retryPendingCleanup(): Promise<boolean> {
+    const lease = this.pendingCleanupLease;
+    if (lease === undefined) return true;
+    if (this.cleanupRetryRunning || !CloudBackupOperationGate.getInstance().owns(lease)) return false;
+    this.cleanupRetryRunning = true;
+    const ctx = CloudBackupDiagnostics.begin(DiagnosticKind.ICON);
+    try {
+      const cache = this.cacher;
+      if (cache?.retryCleanup === undefined || !await cache.retryCleanup() || this.cacheCleanupPending()) {
+        CloudBackupDiagnostics.mark(ctx, DiagnosticStage.ICON_IO, DiagnosticResult.BLOCKED,
+          { artifact: DiagnosticArtifact.ICON, reason: DiagnosticReason.INFLIGHT_UNCONFIRMED, drained: false });
+        return false;
       }
-      await this.fileSync.start();
-      hilog.info(DOMAIN, TAG, 'syncToCloud: started');
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `syncToCloud: error=${JSON.stringify(e)}`);
+      lease.resolveUnknownIo();
+      if (!lease.release()) return false;
+      if (this.pendingCleanupLease === lease) this.pendingCleanupLease = undefined;
+      CloudBackupDiagnostics.mark(ctx, DiagnosticStage.ICON_IO, DiagnosticResult.OK,
+        { artifact: DiagnosticArtifact.ICON, drained: true });
+      return true;
+    } catch (error) {
+      CloudBackupDiagnostics.fail(ctx, DiagnosticStage.CACHE_END, DiagnosticErrorDomain.APP, error);
+      return false;
+    } finally {
+      this.cleanupRetryRunning = false;
+      CloudBackupDiagnostics.end(ctx);
     }
   }
 
-  /** 将云端文件（location=2）缓存到本地，以便读取内容 */
-  private async cacheFile(filePath: string): Promise<void> {
-    // 测试注入下假文件系统内容均在本地，跳过云端缓存拉取
-    if (this.testDeps !== null) {
-      return;
-    }
+  /** 删除只结束已有缓存工作，不因位置或 unlink 失败发起下载。 */
+  private async prepareForDelete(path: string, operation: IconPackOperation): Promise<boolean> {
     try {
-      const uri = fileUri.getUriFromPath(filePath);
-      const cache = new cloudSync.CloudFileCache();
-      await cache.start(uri);
-      hilog.info(DOMAIN, TAG, `cacheFile: cached ${filePath}`);
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `cacheFile: error=${JSON.stringify(e)}`);
+      const cache = this.cacher;
+      const drained = cache?.prepareForDelete === undefined || await cache.prepareForDelete(path, operation.context);
+      if (!drained || this.cacheCleanupPending()) {
+        this.retainCleanup(operation);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      this.retainCleanup(operation);
+      CloudBackupDiagnostics.fail(operation.context, DiagnosticStage.CACHE_END, DiagnosticErrorDomain.APP, error);
+      return false;
     }
   }
 
-  private async removeDirRecursive(dirPath: string): Promise<void> {
+  /** 统一服务持有原生实例；true 仅表示 start 被接受，不是远端完成。 */
+  private async syncToCloud(ctx: DiagnosticContext): Promise<boolean> {
+    try {
+      if (this.testDeps === null) return await CloudBackupSyncService.getInstance().start(ctx);
+      const accepted = this.testDeps.sync === undefined || await this.testDeps.sync.start();
+      CloudBackupDiagnostics.mark(ctx, DiagnosticStage.SYNC_START,
+        accepted ? DiagnosticResult.OK : DiagnosticResult.FAIL, { syncStartAccepted: accepted });
+      return accepted;
+    } catch (error) {
+      CloudBackupDiagnostics.fail(ctx, DiagnosticStage.SYNC_START, DiagnosticErrorDomain.SYNC, error);
+      return false;
+    }
+  }
+
+  /** 可选预缓存失败不等于普通读取失败；未确认结束的 I/O 仍阻止读取并保留许可。 */
+  private async cacheFile(filePath: string, operation: IconPackOperation): Promise<void> {
+    if (!await prepareCloudFileRead(this.cacher, filePath, 2, operation.context)) {
+      this.retainCleanup(operation);
+      throw new Error('CLOUD_CACHE_CLEANUP_PENDING');
+    }
+  }
+
+  /** 仅供上述专用 cache 临时目录清理；不用于 filesDir 用户内容或 cloudDir 枚举。 */
+  private async removeDirRecursive(dirPath: string, ctx: DiagnosticContext): Promise<boolean> {
+    let failed = false;
     try {
       const files = await this.fs.listFiles(dirPath);
       for (const file of files) {
         const fullPath = dirPath + '/' + file;
         try {
           const stat = await this.fs.stat(fullPath);
-          if (stat.isDirectory) {
-            await this.removeDirRecursive(fullPath);
-          } else {
-            await this.fs.deleteFile(fullPath);
+          const removed = stat.isDirectory
+            ? await this.removeDirRecursive(fullPath, ctx)
+            : await this.removeTemporaryFile(fullPath, ctx);
+          if (!removed) failed = true;
+        } catch (error) {
+          if (!this.isMissingFile(error)) {
+            failed = true;
+            this.reportFsFailure(ctx, DiagnosticStage.ICON_IO, error);
           }
-        } catch (e) {
-          hilog.warn(DOMAIN, TAG, `removeDirRecursive: failed to remove ${fullPath}: ${JSON.stringify(e)}`);
         }
       }
-      await this.fs.removeDir(dirPath);
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, `removeDirRecursive: failed to process ${dirPath}: ${JSON.stringify(e)}`);
+      // 不用 rmdir 的递归语义掩盖逐项失败；保留残片给同一专用路径下次重试。
+      if (!failed) await this.fs.removeDir(dirPath);
+    } catch (error) {
+      if (!this.isMissingFile(error)) {
+        failed = true;
+        this.reportFsFailure(ctx, DiagnosticStage.ICON_IO, error);
+      }
+    }
+    if (failed) {
+      CloudBackupDiagnostics.mark(ctx, DiagnosticStage.ICON_IO, DiagnosticResult.FAIL,
+        { artifact: DiagnosticArtifact.ICON, reason: DiagnosticReason.PARTIAL_FAILURE });
+    }
+    return !failed;
+  }
+
+  /** 精确临时文件清理：只有明确 ENOENT 幂等，其他错误如实传播结果并输出白名单诊断。 */
+  private async removeTemporaryFile(path: string, ctx: DiagnosticContext): Promise<boolean> {
+    try {
+      await this.fs.deleteFile(path);
+      return true;
+    } catch (error) {
+      if (this.isMissingFile(error)) return true;
+      this.reportFsFailure(ctx, DiagnosticStage.ICON_IO, error);
+      CloudBackupDiagnostics.mark(ctx, DiagnosticStage.ICON_IO, DiagnosticResult.FAIL,
+        { artifact: DiagnosticArtifact.ICON, reason: DiagnosticReason.PARTIAL_FAILURE });
+      return false;
     }
   }
 
-  private async copyDirRecursive(srcDir: string, destDir: string): Promise<void> {
+  /** 逐文件拷贝并计数：失败不静默，由调用方决定整体成败（备份失败/恢复部分上报）。 */
+  private async copyDirRecursive(srcDir: string, destDir: string, ctx: DiagnosticContext):
+    Promise<IconPackDirCopyResult> {
+    const result = new IconPackDirCopyResult();
+    let files: string[];
     try {
-      const files = await this.fs.listFiles(srcDir);
-      for (const file of files) {
-        const srcPath = srcDir + '/' + file;
-        const destPath = destDir + '/' + file;
-        try {
-          const stat = await this.fs.stat(srcPath);
-          if (stat.isDirectory) {
-            try {
-              await this.fs.makeDir(destPath);
-            } catch (_) {}
-            await this.copyDirRecursive(srcPath, destPath);
-          } else {
-            await this.fs.copyFile(srcPath, destPath);
-          }
-        } catch (e) {
-          hilog.warn(DOMAIN, TAG, `copyDirRecursive: failed to copy ${srcPath}: ${JSON.stringify(e)}`);
-        }
+      files = await this.fs.listFiles(srcDir);
+    } catch (error) {
+      // 源目录不存在视为空目录（兼容无 user_icons 的旧 zip/新装机）；其他列举失败计入失败。
+      if (!this.isMissingFile(error)) {
+        this.reportFsFailure(ctx, DiagnosticStage.ICON_IO, error);
+        result.failed++;
       }
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, `copyDirRecursive: failed to read ${srcDir}: ${JSON.stringify(e)}`);
+      return result;
     }
+    for (const file of files) {
+      const srcPath = srcDir + '/' + file;
+      const destPath = destDir + '/' + file;
+      try {
+        const stat = await this.fs.stat(srcPath);
+        if (stat.isDirectory) {
+          try {
+            await this.fs.makeDir(destPath);
+          } catch (_) {}
+          const nested = await this.copyDirRecursive(srcPath, destPath, ctx);
+          result.copied += nested.copied;
+          result.failed += nested.failed;
+        } else {
+          await this.fs.copyFile(srcPath, destPath);
+          result.copied++;
+        }
+      } catch (error) {
+        this.reportFsFailure(ctx, DiagnosticStage.ICON_IO, error);
+        result.failed++;
+      }
+    }
+    return result;
   }
 }

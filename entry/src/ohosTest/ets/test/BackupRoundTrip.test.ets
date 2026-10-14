@@ -1,15 +1,15 @@
-import { describe, beforeAll, it, expect } from '@ohos/hypium';
+import { describe, beforeAll, afterAll, it, expect } from '@ohos/hypium';
 import { abilityDelegatorRegistry } from '@kit.TestKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import {
-  AppPreference,
   CloudBackupCrypto,
   TokenBackup,
   restoreFromBackup,
   saveBackupToFile,
   TokenConfig,
   otpType,
+  base32Encode, CryptoFrameworkCryptoEngine, LocalBackupFileIo, LocalBackupKind, readLocalBackupSource,
 } from 'common';
 
 /**
@@ -22,7 +22,7 @@ import {
  */
 export default function backupRoundTripTest(): void {
   describe('BackupRoundTripDeviceTest', () => {
-    let context: common.UIAbilityContext;
+    let context: common.Context;
     let tempDir: string;
 
     const makeToken = (uuid: string, name: string): TokenConfig => {
@@ -40,29 +40,18 @@ export default function backupRoundTripTest(): void {
     };
 
     beforeAll(async () => {
-      const delegator = abilityDelegatorRegistry.getAbilityDelegator();
-      const monitor: abilityDelegatorRegistry.AbilityMonitor = { abilityName: 'EntryAbility' };
-      await delegator.addAbilityMonitor(monitor);
-      await delegator.startAbility({
-        bundleName: abilityDelegatorRegistry.getArguments().bundleName,
-        abilityName: 'EntryAbility'
-      });
-      const ability = await delegator.waitAbilityMonitor(monitor, 20000);
-      context = ability.context as common.UIAbilityContext;
-      await delegator.removeAbilityMonitor(monitor);
-      AppStorage.setOrCreate('appContext', context);
-      await AppPreference.loadSettings();
-      tempDir = context.filesDir + '/test_backup_roundtrip';
-      try {
-        fs.mkdirSync(tempDir, true);
-      } catch (_) {
-        // 目录已存在
-      }
+      context = abilityDelegatorRegistry.getAbilityDelegator().getAppContext();
+      // 不启动首页，避免测试环境中已开启的自动云备份及偏好迁移。
+      tempDir = await fs.mkdtemp(context.cacheDir + '/backup-roundtrip-XXXXXX');
+    });
+    afterAll(async () => {
+      if (tempDir) { await fs.rmdir(tempDir); }
     });
 
     it('plaintext_backup_file_roundtrip_preserves_tokens', 0, async () => {
       const token = makeToken('rt-plain-1', 'PlainRoundTrip');
       const backup = new TokenBackup(1, [token]);
+      backup.groups = [];
       const filePath = `${tempDir}/plain.bak`;
 
       try {
@@ -81,6 +70,7 @@ export default function backupRoundTripTest(): void {
     it('encrypted_backup_file_roundtrip_with_password', 0, async () => {
       const token = makeToken('rt-enc-1', 'EncRoundTrip');
       const backup = new TokenBackup(1, [token]);
+      backup.groups = [];
       const filePath = `${tempDir}/enc.bak`;
       const password = 'round-trip-pass-0';
 
@@ -100,6 +90,7 @@ export default function backupRoundTripTest(): void {
     it('encrypted_backup_rejects_wrong_password', 0, async () => {
       const token = makeToken('rt-enc-2', 'EncRoundTrip2');
       const backup = new TokenBackup(1, [token]);
+      backup.groups = [];
       const filePath = `${tempDir}/enc2.bak`;
 
       try {
@@ -114,6 +105,44 @@ export default function backupRoundTripTest(): void {
       } finally {
         cleanupFile(filePath);
       }
+    });
+
+    it('local_content_detection_four_types_legacy_and_cancel_snapshot', 0, async () => {
+      const tokens = [otpType.TOTP, otpType.HOTP, otpType.Steam, otpType.Forti].map((type: otpType): TokenConfig => {
+        const token = makeToken(`synthetic-type-${type}`, '合成🙂');
+        token.TokenType = type;
+        token.FortiToken = 'SYNTHETIC';
+        token.FortiDevID = 'SYNTHETIC';
+        if (type === otpType.Steam) { token.TokenDigits = 5; }
+        return token;
+      });
+      const backup = new TokenBackup(1, tokens);
+      backup.groups = [];
+      const path = `${tempDir}/synthetic-legacy.bak`;
+      const engine = new CryptoFrameworkCryptoEngine();
+      const json = JSON.stringify(backup).replace(/,"TokenGroupId":""/g, '').replace(/,"TokenFavorite":false/g, '')
+        .replace(/"TokenUUID":"[^"]+",?/g, '');
+      try {
+        await new LocalBackupFileIo().writeText(path, base32Encode(engine.utf8Encode(json)));
+        const plain = await readLocalBackupSource(path);
+        expect(plain.kind).assertEqual(LocalBackupKind.PLAIN);
+        const prepared = await plain.prepare();
+        expect(prepared.tokenCount).assertEqual(4);
+        prepared.dispose();
+        let disposed = false;
+        try { prepared.takeForCommit(); } catch (_) { disposed = true; }
+        expect(disposed).assertTrue();
+        plain.dispose();
+        const key = await engine.pbkdf2Derive('synthetic-legacy-password', new Uint8Array(16), 10000, 16);
+        const ciphertext = await engine.aesCbcEncrypt(engine.utf8Encode(json), key, engine.utf8Encode('ohtotptokenaesiv'));
+        await new LocalBackupFileIo().writeText(path, base32Encode(ciphertext));
+        const legacy = await readLocalBackupSource(path);
+        expect(legacy.kind).assertEqual(LocalBackupKind.LEGACY_CANDIDATE);
+        const legacyPrepared = await legacy.prepare('synthetic-legacy-password');
+        expect(legacyPrepared.tokenCount).assertEqual(4);
+        legacyPrepared.dispose();
+        legacy.dispose();
+      } finally { cleanupFile(path); }
     });
 
     it('cloud_backup_crypto_roundtrip_preserves_header_and_payload', 0, async () => {

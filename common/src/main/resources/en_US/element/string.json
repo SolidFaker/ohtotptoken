@@ -1,5 +1,30 @@
 {
   "string": [
+    { "name": "local_backup_plain_warning", "value": "Anyone who obtains this unencrypted file can read your token secrets and generate verification codes. Keep it private and store it securely." },
+    { "name": "local_backup_migration_warning", "value": "This unencrypted text contains OTP URIs and token secrets. It is for migration to a compatible authenticator, not a full backup: groups and app settings are not included, and some token features may not be supported by the recipient." },
+    { "name": "local_backup_export_anyway", "value": "Export anyway" },
+    { "name": "local_backup_password_notice", "value": "Restoring this backup requires the original password. The app cannot recover it. Keep the password safe." },
+    { "name": "local_backup_password_original", "value": "Enter the original backup password. A legacy file is only a candidate until decryption and validation succeed." },
+    { "name": "local_backup_password_failed", "value": "Incorrect password or damaged backup. Try again or cancel." },
+    { "name": "local_backup_processing", "value": "Processing backup… Please wait." },
+    { "name": "local_backup_saving", "value": "Saving file…" },
+    { "name": "local_backup_saved", "value": "File saved. Cloud drive upload status is managed by the file provider." },
+    { "name": "local_backup_prepare_failed", "value": "Could not prepare the backup. Please try again." },
+    { "name": "local_backup_picker_failed", "value": "Could not select a file or location. Please try again." },
+    { "name": "local_backup_read_failed", "value": "Could not finish reading the file. Check access and try again." },
+    { "name": "local_backup_save_incomplete", "value": "Save did not complete. The target file may be incomplete; check it before retrying. No file was automatically deleted or restored." },
+    { "name": "local_backup_unsupported", "value": "This is not a supported local backup, or its contents are invalid. Use an original app backup. Legacy password backups without a header must keep the .bak extension." },
+    { "name": "local_backup_migration_title", "value": "Migration file selected" },
+    { "name": "local_backup_migration_redirect", "value": "This contains OTP URIs, not a full backup. Open URI import and select the file there. Nothing has been imported; the content will not be forwarded automatically." },
+    { "name": "local_backup_open_uri", "value": "Open URI import" },
+    { "name": "local_backup_summary_title", "value": "Confirm backup import" },
+    { "name": "local_backup_summary_plain", "value": "%d unique tokens; %d mergeable groups. Protection: unencrypted.\n\nExisting tokens will not be cleared. Matching token identifiers update their contents while preserving existing favorites and order. Groups merge by identifier, keeping local records." },
+    { "name": "local_backup_summary_encrypted", "value": "%d unique tokens; %d mergeable groups. Protection: password.\n\nExisting tokens will not be cleared. Matching token identifiers update their contents while preserving existing favorites and order. Groups merge by identifier, keeping local records." },
+    { "name": "local_backup_import_confirm", "value": "Import these tokens" },
+    { "name": "local_backup_import_incomplete", "value": "Import did not complete. Some groups or tokens may already have been updated. Check your data before retrying; changes have not been rolled back automatically." },
+    { "name": "local_backup_export_description", "value": "Save an app backup, with or without a password" },
+    { "name": "local_backup_import_description", "value": "Read an app backup and review a summary before importing" },
+    { "name": "local_backup_migration_description", "value": "Export unencrypted OTP URIs for compatible authenticators; not a full backup" },
     { "name": "token_batch_import_title", "value": "Importing tokens" },
     { "name": "token_batch_delete_title", "value": "Deleting tokens" },
     { "name": "token_batch_favorite_title", "value": "Updating favorites" },
@@ -786,11 +811,11 @@
     },
     {
       "name": "cloud_sync_clear_storage_success",
-      "value": "Cloud backup cleared"
+      "value": "Backup deletion submitted; cloud sync is pending"
     },
     {
       "name": "cloud_sync_clear_storage_failed",
-      "value": "Failed to clear some backups, check network and retry"
+      "value": "Some backups could not be cleared. Retry the same scope; cloud completion is not confirmed."
     },
     {
       "name": "cloud_backup_unknown_device",
@@ -842,7 +867,7 @@
     },
     {
       "name": "cloud_backup_restore_confirm_msg",
-      "value": "Restore backup from %s? Current data will be replaced."
+      "value": "Restore the backup from %s? Tokens will be imported into local storage; matching tokens may be updated."
     },
     {
       "name": "cloud_backup_restore_success",
@@ -858,11 +883,11 @@
     },
     {
       "name": "cloud_backup_delete_confirm_msg",
-      "value": "Delete backup from %s? This cannot be undone."
+      "value": "Delete the backup from %s? Only this selected backup in the current account will be deleted. Local tokens and other backups will not be deleted. This cannot be undone."
     },
     {
       "name": "cloud_backup_delete_success",
-      "value": "Backup deleted successfully"
+      "value": "Backup deletion submitted; cloud sync is pending"
     },
     {
       "name": "cloud_backup_delete_failed",
@@ -886,7 +911,7 @@
     },
     {
       "name": "cloud_backup_manual_des",
-      "value": "Upload all tokens to Huawei Cloud"
+      "value": "Create an encrypted local backup and request cloud sync. Remote completion is not immediate."
     },
     {
       "name": "data_dev_info",
@@ -1986,15 +2011,15 @@
     },
     {
       "name": "cloud_sync_clear_device_confirm_msg",
-      "value": "This will permanently delete this device's backup data from Huawei Cloud. This action cannot be undone. Are you sure?"
+      "value": "Delete backups verified as belonging to this installation in the current account? Unverified sources are kept. Local tokens will not be deleted. This cannot be undone."
     },
     {
       "name": "cloud_sync_clear_device_name_confirm_msg",
-      "value": "This will permanently delete backups from devices with the same name but different IDs (e.g. leftovers after reinstall) from Huawei Cloud. This action cannot be undone. Are you sure?"
+      "value": "Delete old backups verified as coming from a same-name device with a different installation identity? This affects only the current account; unverified sources are kept. Local tokens will not be deleted. This cannot be undone."
     },
     {
       "name": "cloud_sync_clear_all_confirm_msg",
-      "value": "This will permanently delete ALL backup data from ALL devices from Huawei Cloud. This action cannot be undone. Are you sure?"
+      "value": "Delete all this app’s backups in the current account, including other-device and unverified-source backups? This change will sync to other devices. Local tokens will not be deleted. This cannot be undone."
     },
     {
       "name": "cloud_backup_login_required",
@@ -2267,6 +2292,398 @@
     {
       "name": "watch_sync_no_device_hint",
       "value": "No connected device found. Please confirm the phone and watch are paired in Huawei Health."
+    },
+    {
+      "name": "cloud_backup_detail_title",
+      "value": "Backup Details"
+    },
+    {
+      "name": "cloud_backup_detail_metadata",
+      "value": "Backup Information"
+    },
+    {
+      "name": "cloud_backup_detail_date",
+      "value": "Backup Time"
+    },
+    {
+      "name": "cloud_backup_detail_source",
+      "value": "Source"
+    },
+    {
+      "name": "cloud_backup_detail_device",
+      "value": "Device Name"
+    },
+    {
+      "name": "cloud_backup_detail_content",
+      "value": "Metadata Status"
+    },
+    {
+      "name": "cloud_backup_detail_location",
+      "value": "Copy Location"
+    },
+    {
+      "name": "cloud_backup_detail_size",
+      "value": "Reported Size"
+    },
+    {
+      "name": "cloud_backup_detail_privacy_hint",
+      "value": "Only existing metadata is shown. Opening these details does not decrypt tokens or display secrets. Copy locations do not confirm completion of the latest cloud change."
+    },
+    {
+      "name": "cloud_backup_view_details",
+      "value": "View Details"
+    },
+    {
+      "name": "cloud_backup_source_other",
+      "value": "Another device"
+    },
+    {
+      "name": "cloud_backup_source_unknown",
+      "value": "Source unverified"
+    },
+    {
+      "name": "cloud_backup_name_missing",
+      "value": "Device name unavailable"
+    },
+    {
+      "name": "cloud_backup_metadata_valid",
+      "value": "Metadata readable"
+    },
+    {
+      "name": "cloud_backup_metadata_pending",
+      "value": "Content not yet available locally"
+    },
+    {
+      "name": "cloud_backup_metadata_read_failed",
+      "value": "Content could not be read; retry later"
+    },
+    {
+      "name": "cloud_backup_metadata_invalid",
+      "value": "Backup damaged or format unsupported; restore unavailable"
+    },
+    {
+      "name": "cloud_backup_metadata_unknown",
+      "value": "Metadata not yet verified"
+    },
+    {
+      "name": "cloud_backup_count_unknown",
+      "value": "Token count unknown"
+    },
+    {
+      "name": "cloud_backup_value_unknown",
+      "value": "Unknown"
+    },
+    {
+      "name": "cloud_backup_location_local",
+      "value": "Local copy only; cloud sync unconfirmed"
+    },
+    {
+      "name": "cloud_backup_location_both",
+      "value": "Local and cloud copies"
+    },
+    {
+      "name": "cloud_backup_location_unknown",
+      "value": "Copy location unknown"
+    },
+    {
+      "name": "cloud_backup_location_hint",
+      "value": "Copy locations describe where content is available, not whether the latest upload or deletion has finished syncing."
+    },
+    {
+      "name": "cloud_backup_refresh",
+      "value": "Reload Backup Information"
+    },
+    {
+      "name": "cloud_backup_restore_requires_metadata",
+      "value": "Restore requires readable metadata. Retry loading unavailable content. Damaged or unsupported backups cannot be restored."
+    },
+    {
+      "name": "cloud_backup_danger_zone",
+      "value": "Delete Backups"
+    },
+    {
+      "name": "cloud_backup_delete_local_unaffected",
+      "value": "Deleting cloud backups does not delete local tokens. Cloud deletion cannot be undone."
+    },
+    {
+      "name": "cloud_backup_delete_other_confirm",
+      "value": "Delete the backup from %s, created by another device? Only this backup in the current account will be deleted, and the change will sync to other devices. Local tokens will not be deleted. This cannot be undone."
+    },
+    {
+      "name": "cloud_backup_delete_unknown_confirm",
+      "value": "Delete the backup from %s? Its source could not be verified. Only this selected backup in the current account will be deleted. Local tokens and other backups will not be deleted. This cannot be undone."
+    },
+    {
+      "name": "cloud_backup_operation_running",
+      "value": "Processing backup operation…"
+    },
+    {
+      "name": "cloud_backup_operation_busy",
+      "value": "Another backup operation is still running. Try again when it finishes."
+    },
+    {
+      "name": "cloud_backup_cleanup_pending",
+      "value": "A previous task has not been confirmed stopped. Conflicting backup operations are paused. Retry stopping that task; this does not start a new backup or deletion."
+    },
+    {
+      "name": "cloud_backup_retry_cleanup",
+      "value": "Retry Stopping Previous Task"
+    },
+    {
+      "name": "cloud_backup_cleanup_ready",
+      "value": "The previous task has stopped. You can now choose an operation again."
+    },
+    {
+      "name": "cloud_backup_retry_sync",
+      "value": "Retry Sync Submission"
+    },
+    {
+      "name": "cloud_backup_history_load_failed",
+      "value": "Backup history could not be loaded. Existing records are kept; please retry."
+    },
+    {
+      "name": "cloud_backup_not_ready",
+      "value": "Cloud storage is not ready. Please retry later."
+    },
+    {
+      "name": "cloud_backup_identity_unavailable",
+      "value": "This device's backup identity is unavailable. No new backup was published. Please retry later."
+    },
+    {
+      "name": "cloud_backup_invalid_target",
+      "value": "This backup is no longer a valid target. Reload the history and select it again."
+    },
+    {
+      "name": "cloud_backup_read_failed",
+      "value": "Backup content could not be read. Please retry later."
+    },
+    {
+      "name": "cloud_backup_decrypt_failed",
+      "value": "Unable to decrypt the backup. Please check your account and retry."
+    },
+    {
+      "name": "cloud_backup_write_failed",
+      "value": "Backup writing or publication failed. No complete new backup was confirmed; existing backups were kept."
+    },
+    {
+      "name": "cloud_backup_icon_failed",
+      "value": "The icon-pack operation failed. Retry the original operation; do not assume all data was processed."
+    },
+    {
+      "name": "cloud_backup_partial_failure",
+      "value": "Only part of the operation completed. Some items failed or their ownership could not be verified. Retry the same scope; unverified items are kept."
+    },
+    {
+      "name": "cloud_backup_partial_sync_failed",
+      "value": "Only part of the operation completed, and sync was not submitted. Retry sync submission, then retry the same operation scope for remaining items."
+    },
+    {
+      "name": "cloud_backup_sync_submit_failed",
+      "value": "Cloud sync could not be submitted. Remote completion is unconfirmed; please retry."
+    },
+    {
+      "name": "cloud_backup_local_done_sync_failed",
+      "value": "The local file operation completed, but cloud sync was not submitted. Retry sync submission; cloud completion is not yet confirmed."
+    },
+    {
+      "name": "cloud_backup_sync_pending",
+      "value": "Sync submitted. The latest cloud change is not yet confirmed."
+    },
+    {
+      "name": "cloud_backup_created_locally",
+      "value": "Backup created locally. Cloud sync is pending confirmation."
+    },
+    {
+      "name": "cloud_backup_create_failed",
+      "value": "Backup creation failed. Please retry; no new successful backup is confirmed."
+    },
+    {
+      "name": "cloud_backup_last_time_hint",
+      "value": "This is the last locally created backup time, not confirmation that an upload completed."
+    },
+    {
+      "name": "cloud_backup_global_sync_state",
+      "value": "Global Cloud Sync State"
+    },
+    {
+      "name": "cloud_backup_global_sync_idle",
+      "value": "No transfer reported in progress"
+    },
+    {
+      "name": "cloud_backup_global_sync_hint",
+      "value": "This global system status does not verify completion of this backup or deletion. A submitted change may still be pending."
+    },
+    {
+      "name": "cloud_backup_unknown_error",
+      "value": "Unrecognized sync error; please retry later"
+    },
+    {
+      "name": "cloud_backup_icon_summary",
+      "value": "%d icon packs · %s (reported metadata)"
+    },
+    {
+      "name": "cloud_backup_settings_failed",
+      "value": "Huawei Cloud settings could not be opened. Please open them from system Settings."
+    },
+    {
+      "name": "cloud_diagnostics_title",
+      "value": "Cloud Backup Diagnostics"
+    },
+    {
+      "name": "cloud_diagnostics_session",
+      "value": "Enable for this launch (up to 10 minutes)"
+    },
+    {
+      "name": "cloud_diagnostics_description",
+      "value": "Off by default and not saved as a preference. Records only approved technical states, never backup contents, credentials, device identities or file paths. Nothing is uploaded. Detailed recording stops when disabled, after 10 minutes, or when the app restarts. Limited privacy-filtered failure summaries may still be logged when off. Disabling does not erase records already in system logs."
+    },
+    {
+      "name": "cloud_diagnostics_unavailable",
+      "value": "Temporary diagnostics could not be enabled. Backup operations are unaffected."
+    },
+    {
+      "name": "developer_test_tokens_failed",
+      "value": "The test-token operation failed. Please retry."
+    },
+    {
+      "name": "cloud_backup_last_failure_title",
+      "value": "Last backup"
+    },
+    {
+      "name": "cloud_backup_last_failure_feedback",
+      "value": "Backup failed. Please report this to the developers."
+    },
+    {
+      "name": "cloud_backup_last_failure_feedback_entry",
+      "value": "Open Issue Feedback"
+    },
+    {
+      "name": "cloud_backup_failure_stage_unknown",
+      "value": "Unknown stage"
+    },
+    {
+      "name": "cloud_backup_failure_stage_device_info",
+      "value": "Device identity check"
+    },
+    {
+      "name": "cloud_backup_failure_stage_encrypt",
+      "value": "Backup encryption"
+    },
+    {
+      "name": "cloud_backup_failure_stage_write",
+      "value": "Backup write"
+    },
+    {
+      "name": "cloud_backup_failure_stage_staged_verify",
+      "value": "Staged content verification"
+    },
+    {
+      "name": "cloud_backup_failure_stage_publish",
+      "value": "Backup publish"
+    },
+    {
+      "name": "cloud_backup_failure_stage_post_verify",
+      "value": "Post-publish verification"
+    },
+    {
+      "name": "cloud_backup_failure_stage_rotate",
+      "value": "Rotation pruning"
+    },
+    {
+      "name": "cloud_backup_failure_stage_icon",
+      "value": "Icon pack backup"
+    },
+    {
+      "name": "cloud_backup_failure_stage_sync",
+      "value": "Sync submission"
+    },
+    {
+      "name": "cloud_backup_failure_reason_post_verify",
+      "value": "Post-publish verification failed; the backup is unavailable"
+    },
+    {
+      "name": "cloud_backup_clear_result_deleted",
+      "value": "Removed %d cloud backup files"
+    },
+    {
+      "name": "cloud_backup_clear_result_skipped",
+      "value": "%d cloud records with unconfirmed ownership were kept"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_hint",
+      "value": "These records have no verifiable source device and never count toward the per-device rotation limit."
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_entry",
+      "value": "Clear records with unverified source"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_confirm",
+      "value": "This deletes %d cloud backup records with unverified source one by one. Items that fail to delete are kept. Local tokens are not affected."
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_done",
+      "value": "Deleted %d records; %d failed and were kept"
+    },
+    {
+      "name": "cloud_backup_failure_stage_snapshot",
+      "value": "Token snapshot read"
+    },
+    {
+      "name": "icon_pack_import_reject_not_zip",
+      "value": "Not a valid ZIP archive, or the file is damaged"
+    },
+    {
+      "name": "icon_pack_import_reject_too_large",
+      "value": "Icon pack exceeds the size limit"
+    },
+    {
+      "name": "icon_pack_import_reject_missing_meta",
+      "value": "pack.json is missing; not an Aegis icon pack"
+    },
+    {
+      "name": "icon_pack_import_reject_entry_overflow",
+      "value": "Icon pack contains too many files"
+    },
+    {
+      "name": "icon_pack_import_reject_file_too_large",
+      "value": "Icon pack contains an oversized file"
+    },
+    {
+      "name": "icon_pack_import_reject_unsafe_path",
+      "value": "Icon pack contains unsafe file paths"
+    },
+    {
+      "name": "icon_pack_import_reject_io",
+      "value": "Failed to read the icon pack"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_sync_failed",
+      "value": "Deleted %d records, kept %d failed deletions; sync submission was rejected"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_sync_pending",
+      "value": "Deleted %d records, kept %d failed deletions; sync pending completion"
+    },
+    {
+      "name": "cloud_backup_feedback_back",
+      "value": "Back"
+    },
+    {
+      "name": "icon_pack_import_reject_invalid_meta",
+      "value": "pack.json could not be parsed"
+    },
+    {
+      "name": "icon_pack_import_reject_duplicate",
+      "value": "An icon pack with the same name and version is already installed"
+    },
+    {
+      "name": "cloud_sync_icon_pack_publication_unresolved",
+      "value": "Publication state is unresolved. Retry; if it persists, clear the cloud backup."
+    },
+    {
+      "name": "icon_pack_rematch_failed",
+      "value": "Failed to rematch icons"
     }
   ]
 }

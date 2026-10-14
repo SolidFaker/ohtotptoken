@@ -11,14 +11,38 @@ npm run probe:steam    # 真实服务端编码探针（需网络）
 npm run golden:steam   # 重新生成 Steam 黄金向量（需 protobufjs）
 ```
 
-以上命令不需要 HarmonyOS SDK、不需要 `npm install`（仅用 node 内置模块），
-已接入 CI 的 `Node offline checks` 作业。
+以上命令不需要 HarmonyOS SDK 或 `npm install`。图标包导入回归需要生产 `@ohos/jszip@1.0.1` 的 JS 核心：本地可复用 `ohpm install` 生成的 entry/oh_modules；干净环境可按下文下载锁文件中的 HAR，并校验 SHA-512 后提取。CI 的 `Node offline checks` 已包含依赖准备；准备需要网络，回归执行本身不连接设备或业务服务。
 
 ArkTS 侧单测/门禁仍走 DevEco：
 
 ```sh
 hvigorw test -p module=entry@default --no-daemon
 ```
+
+## 图标包生产 JSZip 依赖与真机验证
+
+干净环境仅准备 JS 核心，不安装 SDK、不执行 HAR 安装脚本，也不修改 oh_modules：
+
+```sh
+export ICON_PACK_JSZIP_LIB="$(node scripts/prepare-icon-pack-jszip.mjs)"
+node --test "scripts/*.test.mjs"
+```
+
+脚本只下载 entry 锁文件钉住的公开 OHPM HAR，校验完整性后提取至系统临时目录；`ICON_PACK_JSZIP_LIB` 指向包含 lib 的根目录。不要指向来源未知的可执行 JavaScript。CI 使用 `--github-env` 将路径写入作业环境。
+
+真机仅使用可丢弃合成夹具，禁止用综合 `OpenHarmonyTestRunner` 替代专用入口：
+
+```sh
+devecocli build --modules entry@ohosTest
+# 覆盖安装当前主 HAP 和 entry-ohosTest-signed.hap，不卸载、不清应用数据。
+node scripts/verify-icon-pack-publication-device.mjs --device <target> --mode cloud --action run
+node scripts/verify-icon-pack-publication-device.mjs --device <target> --mode cloud --action restart --checkpoint directory
+node scripts/verify-icon-pack-publication-device.mjs --device <target> --action import
+```
+
+检查点白名单为 directory、zip、metadata、commit、commit-sync、prune；串行执行，不能同时启动两个 controller。脚本只输出固定标记和测试汇总；成功必须满足正常退出、未超时、tests=pass=期望值、failure/error/ignore=0、mode 标记和 report code。import 还必须输出只读回收审计标记。`--result <new-file.json>` 可另存不含设备选择器的脱敏结果，已有文件不会覆盖。检查点后的 force-stop 只证明进程重建可见性，不代表断电或双设备同步。
+
+receipt 指向本次精确合成目录；失败清理只能用专用 `--mode <原模式> --action cleanup`。没有合法 receipt 时不得按前缀认领或批量删除目录。真实用户数据、偏好、水位、令牌与云备份不属于夹具回收范围。完整实测及未覆盖项见 [云备份验收记录](../docs/testing/cloud-backup-diagnostics.md#17-不可变代与导入门控单机原生验收2026-10-14)。
 
 ## Steam 字段号交叉校验
 

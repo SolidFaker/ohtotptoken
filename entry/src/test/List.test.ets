@@ -32,6 +32,7 @@ import responsiveLayoutPolicyTest from './ResponsiveLayoutPolicy.test';
 import tokenStoreTest from './TokenStore.test';
 import cryptoUtilsTest from './CryptoUtils.test';
 import cloudBackupManagerTest from './CloudBackupManager.test';
+import cloudFileCacheLoaderTest from './CloudFileCacheLoader.test';
 import backupRestoreHelperTest from './BackupRestoreHelper.test';
 import tokenBackupTest from './TokenBackup.test';
 import tokenCardStoreTest from './TokenCardStore.test';
@@ -41,9 +42,33 @@ import fileUtilsTest from './FileUtils.test';
 import storagePortsTest from './StoragePorts.test';
 import oathAppletTest from './OathApplet.test';
 import iconPackCloudBackupTest from './IconPackCloudBackup.test';
+import iconPackPublicationTest from './IconPackPublication.test';
 import transferProtocolTest from './TransferProtocol.test';
+import cloudBackupDiagnosticsTest from './CloudBackupDiagnostics.test';
+import cloudBackupMetadataTest from './CloudBackupMetadata.test';
+import cloudBackupResultTest from './CloudBackupResult.test';
+import deviceInfoHelperTest from './DeviceInfoHelper.test';
+import fileIoFsGatewayTest from './FileIoFsGateway.test';
+import cloudBackupOperationGateTest from './CloudBackupOperationGate.test';
+import cloudBackupSyncServiceTest from './CloudBackupSyncService.test';
+import cloudBackupStagingTest from './CloudBackupStaging.test';
+import cloudBackupPublicationGuardTest from './CloudBackupPublicationGuard.test';
+import cloudSyncLastFailureTest from './CloudSyncLastFailure.test';
+import iconPackZipGateTest from './IconPackZipGate.test';
+import iconPackImportDiagTest from './IconPackImportDiag.test';
+
+import localBackupFormatTest from './LocalBackupFormat.test';
+import localBackupFileIoTest from './LocalBackupFileIo.test';
+import tokenBatchOperationTest from './TokenBatchOperation.test';
+import localBackupFlowTest from './LocalBackupFlow.test';
+import localBackupImportTest from './LocalBackupImport.test';
 
 export default function testsuite() {
+  localBackupFormatTest();
+  localBackupFileIoTest();
+  tokenBatchOperationTest();
+  localBackupFlowTest();
+  localBackupImportTest();
   localUnitTest();
   smokeTest();
   base32Test();
@@ -78,6 +103,7 @@ export default function testsuite() {
   tokenStoreTest();
   cryptoUtilsTest();
   cloudBackupManagerTest();
+  cloudFileCacheLoaderTest();
   backupRestoreHelperTest();
   tokenBackupTest();
   tokenCardStoreTest();
@@ -87,5 +113,18 @@ export default function testsuite() {
   storagePortsTest();
   oathAppletTest();
   iconPackCloudBackupTest();
+  iconPackPublicationTest();
   transferProtocolTest();
+  cloudBackupDiagnosticsTest();
+  cloudBackupMetadataTest();
+  cloudBackupResultTest();
+  deviceInfoHelperTest();
+  fileIoFsGatewayTest();
+  cloudBackupOperationGateTest();
+  cloudBackupSyncServiceTest();
+  cloudBackupStagingTest();
+  cloudBackupPublicationGuardTest();
+  cloudSyncLastFailureTest();
+  iconPackZipGateTest();
+  iconPackImportDiagTest();
 }

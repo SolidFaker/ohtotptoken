@@ -1,10 +1,11 @@
-import { hilog } from '@kit.PerformanceAnalysisKit';
 import { buffer, util } from '@kit.ArkTS';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { randomBytes } from './CryptoUtils';
-
-const TAG = 'CloudBackupCrypto';
-const DOMAIN = 0xFF00;
+import { isBackupBase64, parseCloudBackupHeaderJson } from './CloudBackupMetadata';
+import {
+  CloudBackupDiagnostics, DiagnosticContext, DiagnosticMode, DiagnosticReason,
+  DiagnosticResult, DiagnosticStage
+} from './CloudBackupDiagnostics';
 /** JWT-like 三段式分隔符：header.payload.signature */
 const TOKEN_SEPARATOR = '.';
 /** PBKDF2 密钥派生迭代次数，10000 次平衡安全性与性能 */
@@ -153,6 +154,21 @@ export interface CloudBackupTokenHeader {
   deviceName: string;
 }
 
+/** 仅在内存使用，不改变备份文件协议。读取失败不能推断云端文件损坏。 */
+export enum CloudBackupMetadataStatus {
+  VALID = 'VALID',
+  PENDING = 'PENDING',
+  READ_FAILED = 'READ_FAILED',
+  INVALID = 'INVALID',
+}
+
+/** 有效头部也可能缺少历史设备字段，不能冒用当前设备信息。 */
+export enum CloudBackupIdentityStatus {
+  COMPLETE = 'COMPLETE',
+  NAME_MISSING = 'NAME_MISSING',
+  ID_MISSING = 'ID_MISSING',
+}
+
 /** 云端备份记录，用于备份历史列表展示 */
 export interface CloudBackupRecord {
   id: string;
@@ -164,6 +180,9 @@ export interface CloudBackupRecord {
   deviceId: string;
   deviceName: string;
   location: number;
+  metadataStatus?: CloudBackupMetadataStatus;
+  identityStatus?: CloudBackupIdentityStatus;
+  tokenCountKnown?: boolean;
 }
 
 export class CloudBackupTokenError extends Error {
@@ -229,6 +248,7 @@ export class CloudBackupCrypto {
     timestamp: number,
     deviceId: string,
     deviceName: string,
+    context?: DiagnosticContext,
   ): Promise<string> {
     if (mode === CloudBackupCryptoMode.NONE) {
       throw new CloudBackupTokenError('Encryption requires a valid mode', 3);
@@ -259,7 +279,7 @@ export class CloudBackupCrypto {
     const payloadB64 = this.uint8ArrayToBase64(ciphertext);
     const hash = await this.engine.sha256Hex(headerB64 + TOKEN_SEPARATOR + payloadB64);
 
-    hilog.info(DOMAIN, TAG, `encrypt: version=2, tokenCount=${tokenCount}, size=${header.size}`);
+    this.reportCryptoSuccess(DiagnosticMode.ENCRYPTED, context);
     return headerB64 + TOKEN_SEPARATOR + payloadB64 + TOKEN_SEPARATOR + hash;
   }
 
@@ -268,49 +288,93 @@ export class CloudBackupCrypto {
    * 流程：拆分三段 → 验证 SHA256 签名 → 解析 header → 检测是否 mock 旧格式 → AES 解密
    * 向后兼容：若 header.salt 以 "mock_salt_" 开头，直接 base64 解码 payload 返回明文
    */
-  async decrypt(token: string, mode: CloudBackupCryptoMode, key: string): Promise<string> {
-    const segments = token.split(TOKEN_SEPARATOR);
-    if (segments.length !== 3) {
-      throw new CloudBackupTokenError('Invalid token format: expected 3 segments', 1);
+  async decrypt(token: string, _mode: CloudBackupCryptoMode, key: string,
+    context?: DiagnosticContext): Promise<string> {
+    try {
+      const segments = token.split(TOKEN_SEPARATOR);
+      if (segments.length !== 3 || segments.some((segment: string): boolean => segment.length === 0)) {
+        throw new CloudBackupTokenError('Invalid token format', 1);
+      }
+      const headerB64 = segments[0];
+      const payloadB64 = segments[1];
+      const signature = segments[2];
+      if (!isBackupBase64(headerB64) || !isBackupBase64(payloadB64)) {
+        throw new CloudBackupTokenError('Invalid token encoding', 1);
+      }
+      const isValid = await this.verifySha256(headerB64 + TOKEN_SEPARATOR + payloadB64, signature);
+      if (!isValid) {
+        throw new CloudBackupTokenError('Token integrity check failed', 2);
+      }
+      const header = this.parseTokenHeader(token, context);
+      let result: string;
+      let mode: DiagnosticMode;
+      if (header.salt.startsWith(MOCK_SALT_PREFIX)) {
+        result = this.decodeBase64(payloadB64);
+        mode = DiagnosticMode.LEGACY;
+      } else {
+        const salt = this.base64ToUint8Array(header.salt);
+        const iv = this.base64ToUint8Array(header.iv);
+        const ciphertext = this.base64ToUint8Array(payloadB64);
+        // 头部字节格式已校验；空密钥或 SDK 解码不可用不能证明备份损坏。
+        if (key.length === 0 || salt.length !== KEY_SIZE || iv.length !== KEY_SIZE || ciphertext.length === 0) {
+          throw new Error('BACKUP_CRYPTO_UNAVAILABLE');
+        }
+        const plaintextBytes = await this.engine.aesCbcDecrypt(ciphertext, key, salt, iv);
+        result = buffer.from(plaintextBytes).toString('utf-8');
+        mode = DiagnosticMode.ENCRYPTED;
+      }
+      if (result.length === 0 && header.size > 0) throw new Error('BACKUP_CRYPTO_UNAVAILABLE');
+      this.reportCryptoSuccess(mode, context);
+      if (context !== undefined) {
+        CloudBackupDiagnostics.mark(context, DiagnosticStage.RESTORE_DECRYPT, DiagnosticResult.OK, { mode: mode });
+      }
+      return result;
+    } catch (error) {
+      // 只信任本模块错误类型；原生 code/message 不能用来推断密钥不匹配或文件损坏。
+      const invalid = error instanceof CloudBackupTokenError && (error.code === 1 || error.code === 2);
+      if (context !== undefined) {
+        CloudBackupDiagnostics.mark(context, DiagnosticStage.RESTORE_DECRYPT, DiagnosticResult.FAIL,
+          { reason: invalid ? DiagnosticReason.INVALID_FORMAT : DiagnosticReason.DECRYPT_FAILED });
+      }
+      if (invalid) throw error as CloudBackupTokenError;
+      throw new CloudBackupTokenError('Backup decryption unavailable', 3);
     }
-
-    const headerB64 = segments[0];
-    const payloadB64 = segments[1];
-    const signature = segments[2];
-
-    const isValid = await this.verifySha256(headerB64 + TOKEN_SEPARATOR + payloadB64, signature);
-    if (!isValid) {
-      throw new CloudBackupTokenError('Token integrity check failed', 2);
-    }
-
-    const headerJson = this.decodeBase64(headerB64);
-    const header = JSON.parse(headerJson) as CloudBackupTokenHeader;
-
-    if (header.salt.startsWith(MOCK_SALT_PREFIX)) {
-      hilog.info(DOMAIN, TAG, 'decrypt: legacy mock format detected, returning plaintext payload');
-      const payload = this.decodeBase64(payloadB64);
-      return payload;
-    }
-
-    const salt = this.base64ToUint8Array(header.salt);
-    const iv = this.base64ToUint8Array(header.iv);
-    const ciphertext = this.base64ToUint8Array(payloadB64);
-
-    const plaintextBytes = await this.engine.aesCbcDecrypt(ciphertext, key, salt, iv);
-    const result = buffer.from(plaintextBytes).toString('utf-8');
-
-    hilog.info(DOMAIN, TAG, `decrypt: version=${header.version}, decrypted size=${result.length}`);
-    return result;
   }
 
   /** 仅解析 header 段（不解密 payload），用于读取元数据如 tokenCount、deviceId 等 */
-  parseTokenHeader(token: string): CloudBackupTokenHeader {
-    const segments = token.split(TOKEN_SEPARATOR);
-    if (segments.length !== 3) {
-      throw new CloudBackupTokenError('Invalid token format: expected 3 segments', 1);
+  parseTokenHeader(token: string, context?: DiagnosticContext): CloudBackupTokenHeader {
+    try {
+      const segments = token.split(TOKEN_SEPARATOR);
+      if (segments.length !== 3 || !isBackupBase64(segments[0]) ||
+        segments[1].length === 0 || segments[2].length === 0) {
+        throw new CloudBackupTokenError('Invalid token format', 1);
+      }
+      const headerJson = this.decodeBase64(segments[0]);
+      if (headerJson.length === 0) throw new CloudBackupTokenError('Backup decoding unavailable', 3);
+      const parsed = parseCloudBackupHeaderJson(headerJson);
+      if (!parsed.valid || parsed.header === undefined) {
+        throw new CloudBackupTokenError('Invalid backup header', 1);
+      }
+      if (context !== undefined) {
+        CloudBackupDiagnostics.mark(context, DiagnosticStage.HEADER_VALIDATE, DiagnosticResult.OK,
+          { headerParsed: true });
+      }
+      return parsed.header;
+    } catch (error) {
+      const invalid = error instanceof CloudBackupTokenError && error.code === 1;
+      if (context !== undefined) {
+        CloudBackupDiagnostics.mark(context, DiagnosticStage.HEADER_VALIDATE, DiagnosticResult.FAIL,
+          { headerParsed: false, reason: invalid ? DiagnosticReason.INVALID_FORMAT : DiagnosticReason.DECRYPT_FAILED });
+      }
+      // 不把 Base64/JSON 异常中可能包含的文件内容传播给上层 UI/日志。
+      throw new CloudBackupTokenError(invalid ? 'Invalid backup header' : 'Backup decoding unavailable', invalid ? 1 : 3);
     }
-    const headerJson = this.decodeBase64(segments[0]);
-    return JSON.parse(headerJson) as CloudBackupTokenHeader;
+  }
+
+  private reportCryptoSuccess(mode: DiagnosticMode, context?: DiagnosticContext): void {
+    if (context !== undefined) {
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.CRYPTO_RESULT, DiagnosticResult.OK, { mode: mode });
+    }
   }
 
   /** 验证三段式 token 的 SHA256 签名是否完整，不执行解密 */
@@ -351,6 +415,7 @@ export class CloudBackupCrypto {
   /** 验证 SHA256 签名：比较计算值与期望值是否一致 */
   private async verifySha256(data: string, expectedHex: string): Promise<boolean> {
     const actualHex = await this.engine.sha256Hex(data);
+    if (!/^[a-fA-F0-9]{64}$/.test(actualHex)) throw new Error('BACKUP_CRYPTO_UNAVAILABLE');
     return actualHex === expectedHex;
   }
 }

@@ -1,240 +1,254 @@
-/**
- * 设备信息帮助类
- * 
- * 提供设备信息的获取和缓存功能。
- * 根据华为开发者文档，deviceInfo 模块返回设备常量信息，
- * 建议应用只调用一次，不需要频繁调用。
- * 
- * 本类采用单例模式，在应用启动时调用 init() 方法初始化设备信息，
- * 然后将设备信息缓存到 AppStorage，后续通过 getter 方法获取。
- * 
- * @module DeviceInfoHelper
- */
-
 import { deviceInfo } from '@kit.BasicServicesKit';
-import { AppStorageV2 } from '@kit.ArkUI';
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { normalizeCloudBackupDeviceId, normalizeCloudBackupDeviceName } from './CloudBackupMetadata';
+import {
+  CloudBackupDiagnostics, DiagnosticKind, DiagnosticResult, DiagnosticSource, DiagnosticStage
+} from './CloudBackupDiagnostics';
 
-const TAG = 'DeviceInfoHelper';
-const DOMAIN = 0xFF00;
-
-/**
- * 设备信息缓存键
- */
 const DEVICE_INFO_KEY = 'cached_device_info';
+const UNKNOWN_DEVICE_NAME = 'Unknown Device';
 
-/**
- * 设备信息接口
- */
 export interface DeviceInfoData {
-  /** 开发者匿名设备标识符（可作为设备唯一标识） */
   odid: string;
-  /** 设备类型 */
   deviceType: string;
-  /** 设备厂家名称 */
   manufacture: string;
-  /** 设备品牌名称 */
   brand: string;
-  /** 外部产品系列 */
   marketName: string;
-  /** 产品系列 */
   productSeries: string;
-  /** 认证型号 */
   productModel: string;
-  /** 内部软件子型号 */
   softwareModel: string;
-  /** 硬件版本号 */
   hardwareModel: string;
-  /** 应用二进制接口 */
   abiList: string;
-  /** 安全补丁级别 */
   securityPatchTag: string;
-  /** 产品版本 */
   displayVersion: string;
-  /** 系统发布类型 */
   osReleaseType: string;
-  /** 系统版本 */
   osFullName: string;
-  /** 发行版系统名称 */
   distributionOSName: string;
-  /** 发行版系统版本号 */
   distributionOSVersion: string;
-  /** 发行版系统API版本 */
   distributionOSApiVersion: number;
-  /** 发行版系统类型 */
   distributionOSReleaseType: string;
 }
 
-/**
- * 设备信息帮助类
- * 
- * 使用示例：
- * ```ts
- * // 应用启动时初始化
- * await DeviceInfoHelper.getInstance().init();
- * 
- * // 获取设备信息
- * const deviceInfo = DeviceInfoHelper.getInstance().getDeviceInfo();
- * console.log('Device ODID:', deviceInfo.odid);
- * console.log('Device Name:', deviceInfo.marketName);
- * ```
- */
-export class DeviceInfoHelper {
-  /** 单例实例 */
-  private static instance: DeviceInfoHelper | null = null;
-  /** 设备信息缓存 */
-  private cachedDeviceInfo: DeviceInfoData | null = null;
-  /** 是否已初始化 */
-  private initialized: boolean = false;
+export enum DeviceInfoField {
+  ODID, DEVICE_TYPE, MANUFACTURE, BRAND, MARKET_NAME, PRODUCT_SERIES, PRODUCT_MODEL,
+  SOFTWARE_MODEL, HARDWARE_MODEL, ABI_LIST, SECURITY_PATCH, DISPLAY_VERSION, OS_RELEASE_TYPE,
+  OS_FULL_NAME, DISTRIBUTION_NAME, DISTRIBUTION_VERSION, DISTRIBUTION_RELEASE_TYPE
+}
 
-  private constructor() {
+/** 每次只访问一个系统 getter，某字段失败不能使其他必要字段失效。 */
+export interface DeviceInfoSource {
+  readText(field: DeviceInfoField): string;
+  readApiVersion(): number;
+}
+
+export interface DeviceInfoCache {
+  get(): DeviceInfoData | null;
+  set(value: DeviceInfoData): void;
+}
+
+class NativeDeviceInfoSource implements DeviceInfoSource {
+  readText(field: DeviceInfoField): string {
+    switch (field) {
+      case DeviceInfoField.ODID: return deviceInfo.ODID;
+      case DeviceInfoField.DEVICE_TYPE: return deviceInfo.deviceType;
+      case DeviceInfoField.MANUFACTURE: return deviceInfo.manufacture;
+      case DeviceInfoField.BRAND: return deviceInfo.brand;
+      case DeviceInfoField.MARKET_NAME: return deviceInfo.marketName;
+      case DeviceInfoField.PRODUCT_SERIES: return deviceInfo.productSeries;
+      case DeviceInfoField.PRODUCT_MODEL: return deviceInfo.productModel;
+      case DeviceInfoField.SOFTWARE_MODEL: return deviceInfo.softwareModel;
+      case DeviceInfoField.HARDWARE_MODEL: return deviceInfo.hardwareModel;
+      case DeviceInfoField.ABI_LIST: return deviceInfo.abiList;
+      case DeviceInfoField.SECURITY_PATCH: return deviceInfo.securityPatchTag;
+      case DeviceInfoField.DISPLAY_VERSION: return deviceInfo.displayVersion;
+      case DeviceInfoField.OS_RELEASE_TYPE: return deviceInfo.osReleaseType;
+      case DeviceInfoField.OS_FULL_NAME: return deviceInfo.osFullName;
+      case DeviceInfoField.DISTRIBUTION_NAME: return deviceInfo.distributionOSName;
+      case DeviceInfoField.DISTRIBUTION_VERSION: return deviceInfo.distributionOSVersion;
+      case DeviceInfoField.DISTRIBUTION_RELEASE_TYPE: return deviceInfo.distributionOSReleaseType;
+      default: return '';
+    }
   }
 
-  /**
-   * 获取 DeviceInfoHelper 单例实例
-   * @returns DeviceInfoHelper 实例
-   */
+  readApiVersion(): number {
+    return deviceInfo.distributionOSApiVersion;
+  }
+}
+
+class AppDeviceInfoCache implements DeviceInfoCache {
+  get(): DeviceInfoData | null {
+    return AppStorage.get<DeviceInfoData>(DEVICE_INFO_KEY) ?? null;
+  }
+
+  set(value: DeviceInfoData): void {
+    AppStorage.setOrCreate(DEVICE_INFO_KEY, value);
+  }
+}
+
+class MemoryDeviceInfoCache implements DeviceInfoCache {
+  private value: DeviceInfoData | null = null;
+
+  get(): DeviceInfoData | null { return this.value; }
+  set(value: DeviceInfoData): void { this.value = value; }
+}
+
+function emptyDeviceInfo(): DeviceInfoData {
+  return {
+    odid: '', deviceType: 'unknown', manufacture: 'unknown', brand: 'unknown',
+    marketName: UNKNOWN_DEVICE_NAME, productSeries: 'unknown', productModel: 'unknown',
+    softwareModel: 'unknown', hardwareModel: 'unknown', abiList: 'unknown', securityPatchTag: 'unknown',
+    displayVersion: 'unknown', osReleaseType: 'unknown', osFullName: 'unknown',
+    distributionOSName: 'unknown', distributionOSVersion: 'unknown', distributionOSApiVersion: 0,
+    distributionOSReleaseType: 'unknown'
+  };
+}
+
+/** 设备信息单例。只记录技术可用性，绝不输出身份、名称或原始异常。 */
+export class DeviceInfoHelper {
+  private static instance: DeviceInfoHelper | null = null;
+  private cachedDeviceInfo: DeviceInfoData | null = null;
+  private initialized: boolean = false;
+  private readonly source: DeviceInfoSource;
+  private readonly cache: DeviceInfoCache;
+
+  private constructor(source: DeviceInfoSource, cache: DeviceInfoCache) {
+    this.source = source;
+    this.cache = cache;
+  }
+
   static getInstance(): DeviceInfoHelper {
     if (!DeviceInfoHelper.instance) {
-      DeviceInfoHelper.instance = new DeviceInfoHelper();
+      DeviceInfoHelper.instance = new DeviceInfoHelper(new NativeDeviceInfoSource(), new AppDeviceInfoCache());
     }
     return DeviceInfoHelper.instance;
   }
 
-  /**
-   * 初始化设备信息
-   * 
-   * 从 deviceInfo 模块获取设备信息并缓存到 AppStorage。
-   * 根据华为开发者文档，此方法应在应用启动时调用一次。
-   * 
-   * @returns Promise<void>
-   */
+  /** 独立实例不污染全局单例；测试不调用系统 getter/AppStorage。 */
+  static createForTest(source: DeviceInfoSource, cache?: DeviceInfoCache): DeviceInfoHelper {
+    return new DeviceInfoHelper(source, cache !== undefined ? cache : new MemoryDeviceInfoCache());
+  }
+
+  private readText(field: DeviceInfoField, fallback: string = 'unknown'): string {
+    try {
+      const value = this.source.readText(field);
+      return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  private readApiVersion(): number {
+    try {
+      const value = this.source.readApiVersion();
+      return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  private readRequired(data: DeviceInfoData): void {
+    data.odid = normalizeCloudBackupDeviceId(this.readText(DeviceInfoField.ODID, ''));
+    const marketName = normalizeCloudBackupDeviceName(this.readText(DeviceInfoField.MARKET_NAME, ''));
+    const productModel = normalizeCloudBackupDeviceName(this.readText(DeviceInfoField.PRODUCT_MODEL, ''));
+    data.productModel = productModel.length > 0 ? productModel : 'unknown';
+    data.marketName = marketName.length > 0 ? marketName :
+      (productModel.length > 0 ? productModel : UNKNOWN_DEVICE_NAME);
+  }
+
+  private store(data: DeviceInfoData): void {
+    // 系统缓存失败也不能丢失本实例已经读取到的必要字段。
+    this.cachedDeviceInfo = data;
+    try {
+      this.cache.set(data);
+    } catch (_) {
+      // 缓存不是读取成功的前置条件。
+    }
+  }
+
+  private report(data: DeviceInfoData, source: DiagnosticSource): void {
+    const context = CloudBackupDiagnostics.begin(DiagnosticKind.DEVICE_INFO);
+    CloudBackupDiagnostics.mark(context, DiagnosticStage.DEVICE_INFO, DiagnosticResult.OK, {
+      source: source,
+      identityAvailable: normalizeCloudBackupDeviceId(data.odid).length > 0,
+      nameAvailable: normalizeCloudBackupDeviceName(data.marketName).length > 0,
+    });
+    CloudBackupDiagnostics.end(context);
+  }
+
   async init(): Promise<void> {
     if (this.initialized) {
-      hilog.info(DOMAIN, TAG, 'init: already initialized');
       return;
     }
-
-    try {
-      hilog.info(DOMAIN, TAG, 'init: collecting device info');
-
-      const deviceInfoData: DeviceInfoData = {
-        odid: deviceInfo.ODID || 'unknown_odid',
-        deviceType: deviceInfo.deviceType || 'unknown',
-        manufacture: deviceInfo.manufacture || 'unknown',
-        brand: deviceInfo.brand || 'unknown',
-        marketName: deviceInfo.marketName || 'Unknown Device',
-        productSeries: deviceInfo.productSeries || 'unknown',
-        productModel: deviceInfo.productModel || 'unknown',
-        softwareModel: deviceInfo.softwareModel || 'unknown',
-        hardwareModel: deviceInfo.hardwareModel || 'unknown',
-        abiList: deviceInfo.abiList || 'unknown',
-        securityPatchTag: deviceInfo.securityPatchTag || 'unknown',
-        displayVersion: deviceInfo.displayVersion || 'unknown',
-        osReleaseType: deviceInfo.osReleaseType || 'unknown',
-        osFullName: deviceInfo.osFullName || 'unknown',
-        distributionOSName: deviceInfo.distributionOSName || 'unknown',
-        distributionOSVersion: deviceInfo.distributionOSVersion || 'unknown',
-        distributionOSApiVersion: deviceInfo.distributionOSApiVersion || 0,
-        distributionOSReleaseType: deviceInfo.distributionOSReleaseType || 'unknown',
-      };
-
-      this.cachedDeviceInfo = deviceInfoData;
-      this.initialized = true;
-
-      // 缓存到 AppStorage
-      AppStorage.setOrCreate(DEVICE_INFO_KEY, deviceInfoData);
-
-      hilog.info(DOMAIN, TAG, `init: completed, ODID=${deviceInfoData.odid}, marketName=${deviceInfoData.marketName}`);
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `init: error=${JSON.stringify(e)}`);
-    }
+    const data = emptyDeviceInfo();
+    this.readRequired(data);
+    data.deviceType = this.readText(DeviceInfoField.DEVICE_TYPE);
+    data.manufacture = this.readText(DeviceInfoField.MANUFACTURE);
+    data.brand = this.readText(DeviceInfoField.BRAND);
+    data.productSeries = this.readText(DeviceInfoField.PRODUCT_SERIES);
+    data.softwareModel = this.readText(DeviceInfoField.SOFTWARE_MODEL);
+    data.hardwareModel = this.readText(DeviceInfoField.HARDWARE_MODEL);
+    data.abiList = this.readText(DeviceInfoField.ABI_LIST);
+    data.securityPatchTag = this.readText(DeviceInfoField.SECURITY_PATCH);
+    data.displayVersion = this.readText(DeviceInfoField.DISPLAY_VERSION);
+    data.osReleaseType = this.readText(DeviceInfoField.OS_RELEASE_TYPE);
+    data.osFullName = this.readText(DeviceInfoField.OS_FULL_NAME);
+    data.distributionOSName = this.readText(DeviceInfoField.DISTRIBUTION_NAME);
+    data.distributionOSVersion = this.readText(DeviceInfoField.DISTRIBUTION_VERSION);
+    data.distributionOSReleaseType = this.readText(DeviceInfoField.DISTRIBUTION_RELEASE_TYPE);
+    data.distributionOSApiVersion = this.readApiVersion();
+    this.store(data);
+    this.initialized = true;
+    this.report(data, DiagnosticSource.INITIAL);
   }
 
-  /**
-   * 获取设备信息
-   * 
-   * @returns 设备信息对象，如果未初始化则返回默认值
-   */
+  /** 创建备份前只重试必要读取；返回 false 时不得制造“本设备”归属。 */
+  refreshRequiredInfo(): boolean {
+    const data = this.getDeviceInfo();
+    this.readRequired(data);
+    this.store(data);
+    this.report(data, DiagnosticSource.RETRY);
+    return data.odid.length > 0;
+  }
+
   getDeviceInfo(): DeviceInfoData {
-    if (this.cachedDeviceInfo) {
+    if (this.cachedDeviceInfo !== null) {
       return this.cachedDeviceInfo;
     }
-
-    // 尝试从 AppStorage 获取
-    const appStorageInfo = AppStorage.get<DeviceInfoData>(DEVICE_INFO_KEY);
-    if (appStorageInfo) {
-      this.cachedDeviceInfo = appStorageInfo;
-      return appStorageInfo;
+    try {
+      const cached = this.cache.get();
+      if (cached !== null) {
+        cached.odid = typeof cached.odid === 'string' ? normalizeCloudBackupDeviceId(cached.odid) : '';
+        const marketName = typeof cached.marketName === 'string' ? normalizeCloudBackupDeviceName(cached.marketName) : '';
+        const model = typeof cached.productModel === 'string' ? normalizeCloudBackupDeviceName(cached.productModel) : '';
+        cached.marketName = marketName || model || UNKNOWN_DEVICE_NAME;
+        this.cachedDeviceInfo = cached;
+        this.report(cached, DiagnosticSource.CACHED);
+        return cached;
+      }
+    } catch (_) {
+      // 缓存不可用则返回未初始化状态，创建前仍能重新读取系统必要字段。
     }
-
-    // 返回默认值
-    hilog.warn(DOMAIN, TAG, 'getDeviceInfo: not initialized, returning default values');
-    return {
-      odid: 'unknown_odid',
-      deviceType: 'unknown',
-      manufacture: 'unknown',
-      brand: 'unknown',
-      marketName: 'Unknown Device',
-      productSeries: 'unknown',
-      productModel: 'unknown',
-      softwareModel: 'unknown',
-      hardwareModel: 'unknown',
-      abiList: 'unknown',
-      securityPatchTag: 'unknown',
-      displayVersion: 'unknown',
-      osReleaseType: 'unknown',
-      osFullName: 'unknown',
-      distributionOSName: 'unknown',
-      distributionOSVersion: 'unknown',
-      distributionOSApiVersion: 0,
-      distributionOSReleaseType: 'unknown',
-    };
+    const fallback = emptyDeviceInfo();
+    this.report(fallback, DiagnosticSource.FALLBACK);
+    return fallback;
   }
 
-  /**
-   * 获取设备唯一标识符
-   * 
-   * 使用 ODID 作为设备唯一标识，无需权限。
-   * 
-   * @returns 设备唯一标识符
-   */
   getDeviceId(): string {
-    return this.getDeviceInfo().odid;
+    return normalizeCloudBackupDeviceId(this.getDeviceInfo().odid);
   }
 
-  /**
-   * 获取设备名称
-   * 
-   * 使用 marketName 作为设备名称。
-   * 
-   * @returns 设备名称
-   */
   getDeviceName(): string {
-    return this.getDeviceInfo().marketName;
+    return normalizeCloudBackupDeviceName(this.getDeviceInfo().marketName) || UNKNOWN_DEVICE_NAME;
   }
 
-  /**
-   * 当前设备是否为 PC/2in1。
-   */
   isPc(): boolean {
-    return this.getDeviceInfo().deviceType === deviceInfo.DeviceTypes.TYPE_2IN1;
+    return this.getDeviceInfo().deviceType === '2in1';
   }
 
-  /**
-   * 当前设备是否为 PC/2in1 或平板。
-   */
   isPcOrTablet(): boolean {
-    const deviceType = this.getDeviceInfo().deviceType;
-    return deviceType === deviceInfo.DeviceTypes.TYPE_2IN1 ||
-      deviceType === deviceInfo.DeviceTypes.TYPE_TABLET;
+    const type = this.getDeviceInfo().deviceType;
+    return type === '2in1' || type === 'tablet';
   }
 
-  /**
-   * 检查是否已初始化
-   * 
-   * @returns 是否已初始化
-   */
   isInitialized(): boolean {
     return this.initialized;
   }

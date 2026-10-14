@@ -1,5 +1,30 @@
 {
   "string": [
+    { "name": "local_backup_plain_warning", "value": "获得这份未加密文件的人可以读取令牌密钥并生成验证码。请勿分享文件，并将其保存在安全位置。" },
+    { "name": "local_backup_migration_warning", "value": "此文本由未加密的 OTP URI 构成，包含令牌密钥。它用于迁移到兼容的验证器，不是完整备份，不包含完整分组和应用配置。接收方可能不支持部分令牌特性，不能保证无损导入。" },
+    { "name": "local_backup_export_anyway", "value": "仍然导出" },
+    { "name": "local_backup_password_notice", "value": "恢复这份备份必须使用原密码，应用无法找回密码。请妥善保管。" },
+    { "name": "local_backup_password_original", "value": "请输入备份的原密码。旧格式文件在解密与校验成功前仅为候选，尚不能确认有效。" },
+    { "name": "local_backup_password_failed", "value": "密码错误或备份文件损坏，请重试或取消。" },
+    { "name": "local_backup_processing", "value": "正在处理备份，请稍候…" },
+    { "name": "local_backup_saving", "value": "正在保存文件…" },
+    { "name": "local_backup_saved", "value": "文件已保存。云盘上传状态由文件提供方管理。" },
+    { "name": "local_backup_prepare_failed", "value": "无法准备备份，请重试。" },
+    { "name": "local_backup_picker_failed", "value": "无法选择文件或保存位置，请重试。" },
+    { "name": "local_backup_read_failed", "value": "文件读取未完成，请检查访问权限后重试。" },
+    { "name": "local_backup_save_incomplete", "value": "保存未完成，目标文件可能不完整。请检查后重试；应用未自动删除文件，也未恢复被覆盖的原文件。" },
+    { "name": "local_backup_unsupported", "value": "此入口不支持该文件，或备份内容无效。请选择本应用原始备份；无版本标识的旧密码备份需保留 .bak 后缀。" },
+    { "name": "local_backup_migration_title", "value": "选中了迁移文件" },
+    { "name": "local_backup_migration_redirect", "value": "此文件包含 OTP URI，不是完整备份。请前往 URI 导入并在那里重新选择文件。当前尚未导入任何内容，也不会自动转交文件正文。" },
+    { "name": "local_backup_open_uri", "value": "前往 URI 导入" },
+    { "name": "local_backup_summary_title", "value": "确认导入备份" },
+    { "name": "local_backup_summary_plain", "value": "%d 个唯一令牌，%d 个可合并分组。保护方式：不加密。\n\n不会清空现有令牌；相同令牌标识的内容会更新，既有收藏和排序保留。分组按标识合并，同标识保留本地记录。" },
+    { "name": "local_backup_summary_encrypted", "value": "%d 个唯一令牌，%d 个可合并分组。保护方式：密码加密。\n\n不会清空现有令牌；相同令牌标识的内容会更新，既有收藏和排序保留。分组按标识合并，同标识保留本地记录。" },
+    { "name": "local_backup_import_confirm", "value": "导入这些令牌" },
+    { "name": "local_backup_import_incomplete", "value": "导入未完成，部分分组或令牌可能已更新。请检查后重试；应用未自动回滚这些变更。" },
+    { "name": "local_backup_export_description", "value": "保存本应用备份，可选择密码加密或不加密" },
+    { "name": "local_backup_import_description", "value": "读取本应用备份，查看摘要后再确认导入" },
+    { "name": "local_backup_migration_description", "value": "导出未加密的 OTP URI 供兼容验证器迁移，不是完整备份" },
     { "name": "token_batch_import_title", "value": "正在导入令牌" },
     { "name": "token_batch_delete_title", "value": "正在删除令牌" },
     { "name": "token_batch_favorite_title", "value": "正在更新收藏" },
@@ -812,11 +837,11 @@
     },
     {
       "name": "cloud_sync_clear_storage_success",
-      "value": "云端备份已清空"
+      "value": "备份删除已提交，云端同步尚未完成"
     },
     {
       "name": "cloud_sync_clear_storage_failed",
-      "value": "部分备份清理失败，请检查网络后重试"
+      "value": "部分备份未能清理，请按原范围重试；尚未确认云端完成。"
     },
     {
       "name": "cloud_backup_unknown_device",
@@ -868,7 +893,7 @@
     },
     {
       "name": "cloud_backup_restore_confirm_msg",
-      "value": "确定恢复 %s 的备份？当前数据将被替换。"
+      "value": "确定恢复 %s 的备份？令牌将导入本地存储，已有的匹配令牌可能被更新。"
     },
     {
       "name": "cloud_backup_restore_success",
@@ -884,11 +909,11 @@
     },
     {
       "name": "cloud_backup_delete_confirm_msg",
-      "value": "确定删除 %s 的备份？此操作不可撤销。"
+      "value": "确定删除 %s 的备份？本次仅删除当前账号中选中的这一份备份，不会删除本地令牌或其他备份。此操作不可撤销。"
     },
     {
       "name": "cloud_backup_delete_success",
-      "value": "备份删除成功"
+      "value": "备份删除已提交，云端同步尚未完成"
     },
     {
       "name": "cloud_backup_delete_failed",
@@ -912,7 +937,7 @@
     },
     {
       "name": "cloud_backup_manual_des",
-      "value": "将当前所有令牌备份到华为云"
+      "value": "创建加密的本地备份并提交云端同步，远端不会立即完成。"
     },
     {
       "name": "data_dev_info",
@@ -2012,15 +2037,15 @@
     },
     {
       "name": "cloud_sync_clear_device_confirm_msg",
-      "value": "此操作将从华为云永久删除本设备的所有备份数据，此操作不可撤销。确定要继续吗？"
+      "value": "确定删除当前账号中已确认属于本次安装的备份？归属无法确认的项目将保留，不会删除本地令牌。此操作不可撤销。"
     },
     {
       "name": "cloud_sync_clear_device_name_confirm_msg",
-      "value": "此操作将从华为云永久删除同名设备（如卸载重装前遗留）的旧备份数据，此操作不可撤销。确定要继续吗？"
+      "value": "确定删除已确认来自同名设备、但安装身份不同的旧备份？范围仅限当前账号，归属无法确认的项目将保留，不会删除本地令牌。此操作不可撤销。"
     },
     {
       "name": "cloud_sync_clear_all_confirm_msg",
-      "value": "此操作将从华为云永久删除所有设备的所有备份数据，此操作不可撤销。确定要继续吗？"
+      "value": "确定删除本应用在当前账号中的全部备份，包括其他设备和来源不明的备份？变更会同步到其他设备，不会删除本地令牌。此操作不可撤销。"
     },
     {
       "name": "cloud_backup_login_required",
@@ -2293,6 +2318,398 @@
     {
       "name": "watch_sync_no_device_hint",
       "value": "未检测到已连接设备，请确认手机与手表已在华为运动健康中配对连接"
+    },
+    {
+      "name": "cloud_backup_detail_title",
+      "value": "备份详情"
+    },
+    {
+      "name": "cloud_backup_detail_metadata",
+      "value": "备份信息"
+    },
+    {
+      "name": "cloud_backup_detail_date",
+      "value": "备份时间"
+    },
+    {
+      "name": "cloud_backup_detail_source",
+      "value": "来源"
+    },
+    {
+      "name": "cloud_backup_detail_device",
+      "value": "设备名称"
+    },
+    {
+      "name": "cloud_backup_detail_content",
+      "value": "元数据状态"
+    },
+    {
+      "name": "cloud_backup_detail_location",
+      "value": "副本位置"
+    },
+    {
+      "name": "cloud_backup_detail_size",
+      "value": "记录的大小"
+    },
+    {
+      "name": "cloud_backup_detail_privacy_hint",
+      "value": "仅展示已有元数据。打开详情不会解密令牌或显示密钥。副本位置不能证明本次云端变更已完成。"
+    },
+    {
+      "name": "cloud_backup_view_details",
+      "value": "查看详情"
+    },
+    {
+      "name": "cloud_backup_source_other",
+      "value": "其他设备"
+    },
+    {
+      "name": "cloud_backup_source_unknown",
+      "value": "来源未确认"
+    },
+    {
+      "name": "cloud_backup_name_missing",
+      "value": "设备名称不可用"
+    },
+    {
+      "name": "cloud_backup_metadata_valid",
+      "value": "元数据可读取"
+    },
+    {
+      "name": "cloud_backup_metadata_pending",
+      "value": "内容尚未在本地可用"
+    },
+    {
+      "name": "cloud_backup_metadata_read_failed",
+      "value": "内容暂时无法读取，请稍后重试"
+    },
+    {
+      "name": "cloud_backup_metadata_invalid",
+      "value": "备份损坏或格式不受支持，无法恢复"
+    },
+    {
+      "name": "cloud_backup_metadata_unknown",
+      "value": "元数据尚未确认"
+    },
+    {
+      "name": "cloud_backup_count_unknown",
+      "value": "令牌数量未知"
+    },
+    {
+      "name": "cloud_backup_value_unknown",
+      "value": "未知"
+    },
+    {
+      "name": "cloud_backup_location_local",
+      "value": "仅本地副本，云端同步未确认"
+    },
+    {
+      "name": "cloud_backup_location_both",
+      "value": "本地和云端均有副本"
+    },
+    {
+      "name": "cloud_backup_location_unknown",
+      "value": "副本位置未知"
+    },
+    {
+      "name": "cloud_backup_location_hint",
+      "value": "副本位置仅说明内容可用的位置，不代表本次上传或删除已完成同步。"
+    },
+    {
+      "name": "cloud_backup_refresh",
+      "value": "重新加载备份信息"
+    },
+    {
+      "name": "cloud_backup_restore_requires_metadata",
+      "value": "恢复需要可读取的元数据。内容暂不可用时可重新加载；损坏或格式不受支持的备份无法恢复。"
+    },
+    {
+      "name": "cloud_backup_danger_zone",
+      "value": "删除备份"
+    },
+    {
+      "name": "cloud_backup_delete_local_unaffected",
+      "value": "删除云端备份不会删除本地令牌。云端删除操作不可撤销。"
+    },
+    {
+      "name": "cloud_backup_delete_other_confirm",
+      "value": "确定删除 %s 的备份？该备份来自其他设备。本次仅删除当前账号中的这一份备份，变更会同步到其他设备，不会删除本地令牌。此操作不可撤销。"
+    },
+    {
+      "name": "cloud_backup_delete_unknown_confirm",
+      "value": "确定删除 %s 的备份？该备份的来源无法确认。本次仅删除当前账号中选中的这一份备份，不会删除本地令牌或其他备份。此操作不可撤销。"
+    },
+    {
+      "name": "cloud_backup_operation_running",
+      "value": "正在处理备份操作…"
+    },
+    {
+      "name": "cloud_backup_operation_busy",
+      "value": "另一项备份操作仍在进行，请等待结束后重试。"
+    },
+    {
+      "name": "cloud_backup_cleanup_pending",
+      "value": "尚未确认上一任务已停止，冲突的备份操作已暂停。请重试停止原任务；此操作不会创建新备份或执行新的删除。"
+    },
+    {
+      "name": "cloud_backup_retry_cleanup",
+      "value": "重试停止上一任务"
+    },
+    {
+      "name": "cloud_backup_cleanup_ready",
+      "value": "已确认上一任务停止，可以重新选择操作。"
+    },
+    {
+      "name": "cloud_backup_retry_sync",
+      "value": "重试提交同步"
+    },
+    {
+      "name": "cloud_backup_history_load_failed",
+      "value": "无法加载备份历史，已保留原有列表，请重试。"
+    },
+    {
+      "name": "cloud_backup_not_ready",
+      "value": "云存储尚未就绪，请稍后重试。"
+    },
+    {
+      "name": "cloud_backup_identity_unavailable",
+      "value": "无法获取本设备的备份身份，未发布新备份，请稍后重试。"
+    },
+    {
+      "name": "cloud_backup_invalid_target",
+      "value": "此备份已不是有效目标，请重新加载历史并选择。"
+    },
+    {
+      "name": "cloud_backup_read_failed",
+      "value": "无法读取备份内容，请稍后重试。"
+    },
+    {
+      "name": "cloud_backup_decrypt_failed",
+      "value": "无法解密备份，请确认账号并重试。"
+    },
+    {
+      "name": "cloud_backup_write_failed",
+      "value": "备份写入或发布失败，未确认新的完整备份，已有备份仍保留。"
+    },
+    {
+      "name": "cloud_backup_icon_failed",
+      "value": "图标包操作失败，请重试原操作；不能视为所有数据均已处理。"
+    },
+    {
+      "name": "cloud_backup_partial_failure",
+      "value": "仅部分操作完成，仍有失败或归属无法确认的项目。请按原范围重试，归属不明的项目已保留。"
+    },
+    {
+      "name": "cloud_backup_partial_sync_failed",
+      "value": "仅部分操作完成，且同步未能提交。请重试提交同步，再按原操作范围重试剩余项目。"
+    },
+    {
+      "name": "cloud_backup_sync_submit_failed",
+      "value": "云端同步未能提交，远端完成状态未确认，请重试。"
+    },
+    {
+      "name": "cloud_backup_local_done_sync_failed",
+      "value": "本地文件操作已完成，但云端同步未能提交。请重试提交同步；尚未确认云端完成。"
+    },
+    {
+      "name": "cloud_backup_sync_pending",
+      "value": "同步已提交，尚未确认本次云端变更完成。"
+    },
+    {
+      "name": "cloud_backup_created_locally",
+      "value": "备份已在本地创建，云端同步仍待确认。"
+    },
+    {
+      "name": "cloud_backup_create_failed",
+      "value": "备份创建失败，未确认新的成功备份，请重试。"
+    },
+    {
+      "name": "cloud_backup_last_time_hint",
+      "value": "此时间表示最近一次本地备份创建，不代表上传已完成。"
+    },
+    {
+      "name": "cloud_backup_global_sync_state",
+      "value": "全局云同步状态"
+    },
+    {
+      "name": "cloud_backup_global_sync_idle",
+      "value": "未报告正在进行的传输"
+    },
+    {
+      "name": "cloud_backup_global_sync_hint",
+      "value": "系统全局状态不能证明本次备份或删除已完成，已提交的变更仍可能等待同步。"
+    },
+    {
+      "name": "cloud_backup_unknown_error",
+      "value": "未识别的同步错误，请稍后重试"
+    },
+    {
+      "name": "cloud_backup_icon_summary",
+      "value": "%d 个图标包 · %s（记录的元数据）"
+    },
+    {
+      "name": "cloud_backup_settings_failed",
+      "value": "无法打开华为云空间设置，请从系统设置手动进入。"
+    },
+    {
+      "name": "cloud_diagnostics_title",
+      "value": "云备份诊断"
+    },
+    {
+      "name": "cloud_diagnostics_session",
+      "value": "本次启动临时开启（最长10分钟）"
+    },
+    {
+      "name": "cloud_diagnostics_description",
+      "value": "默认关闭，不保存为偏好。仅记录经过白名单筛选的技术状态，不记录备份内容、凭据、设备身份或文件路径，不上传任何数据。关闭、10分钟到期或应用重启后停止详细记录。关闭时仍可能输出经隐私过滤的限频失败摘要。关闭不会擦除已进入系统日志的记录。"
+    },
+    {
+      "name": "cloud_diagnostics_unavailable",
+      "value": "无法开启临时诊断，备份功能不受影响。"
+    },
+    {
+      "name": "developer_test_tokens_failed",
+      "value": "测试令牌操作失败，请重试。"
+    },
+    {
+      "name": "cloud_backup_last_failure_title",
+      "value": "最近一次备份"
+    },
+    {
+      "name": "cloud_backup_last_failure_feedback",
+      "value": "备份失败，请反馈开发者"
+    },
+    {
+      "name": "cloud_backup_last_failure_feedback_entry",
+      "value": "前往问题反馈"
+    },
+    {
+      "name": "cloud_backup_failure_stage_unknown",
+      "value": "未知阶段"
+    },
+    {
+      "name": "cloud_backup_failure_stage_device_info",
+      "value": "设备身份读取"
+    },
+    {
+      "name": "cloud_backup_failure_stage_encrypt",
+      "value": "备份加密"
+    },
+    {
+      "name": "cloud_backup_failure_stage_write",
+      "value": "备份写入"
+    },
+    {
+      "name": "cloud_backup_failure_stage_staged_verify",
+      "value": "暂存内容校验"
+    },
+    {
+      "name": "cloud_backup_failure_stage_publish",
+      "value": "备份发布"
+    },
+    {
+      "name": "cloud_backup_failure_stage_post_verify",
+      "value": "发布后校验"
+    },
+    {
+      "name": "cloud_backup_failure_stage_rotate",
+      "value": "轮换剪除"
+    },
+    {
+      "name": "cloud_backup_failure_stage_icon",
+      "value": "图标包备份"
+    },
+    {
+      "name": "cloud_backup_failure_stage_sync",
+      "value": "同步提交"
+    },
+    {
+      "name": "cloud_backup_failure_reason_post_verify",
+      "value": "发布后校验未通过，备份暂不可用"
+    },
+    {
+      "name": "cloud_backup_clear_result_deleted",
+      "value": "已清理 %d 份云端备份"
+    },
+    {
+      "name": "cloud_backup_clear_result_skipped",
+      "value": "另有 %d 条无法确认归属的云端记录已保留"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_hint",
+      "value": "以下记录无法确认来源设备，不参与任何设备的轮换保留策略。"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_entry",
+      "value": "清除来源未确认的记录"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_confirm",
+      "value": "将逐条删除 %d 条来源未确认的云端备份记录，删除失败的条目会保留。本地令牌不受影响。"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_done",
+      "value": "已删除 %d 条记录，%d 条删除失败已保留"
+    },
+    {
+      "name": "cloud_backup_failure_stage_snapshot",
+      "value": "令牌快照读取"
+    },
+    {
+      "name": "icon_pack_import_reject_not_zip",
+      "value": "不是有效的 ZIP 压缩包，或文件已损坏"
+    },
+    {
+      "name": "icon_pack_import_reject_too_large",
+      "value": "图标包超出大小限制"
+    },
+    {
+      "name": "icon_pack_import_reject_missing_meta",
+      "value": "缺少 pack.json，不是 Aegis 图标包"
+    },
+    {
+      "name": "icon_pack_import_reject_entry_overflow",
+      "value": "图标包文件数量超出限制"
+    },
+    {
+      "name": "icon_pack_import_reject_file_too_large",
+      "value": "图标包含有超过大小限制的文件"
+    },
+    {
+      "name": "icon_pack_import_reject_unsafe_path",
+      "value": "图标包含有不安全的文件路径"
+    },
+    {
+      "name": "icon_pack_import_reject_io",
+      "value": "读取图标包失败"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_sync_failed",
+      "value": "已删除 %d 条记录，%d 条删除失败已保留，同步提交被拒绝"
+    },
+    {
+      "name": "cloud_backup_unknown_cleanup_sync_pending",
+      "value": "已删除 %d 条记录，%d 条删除失败已保留，同步等待完成"
+    },
+    {
+      "name": "cloud_backup_feedback_back",
+      "value": "返回"
+    },
+    {
+      "name": "icon_pack_import_reject_invalid_meta",
+      "value": "pack.json 无法解析"
+    },
+    {
+      "name": "icon_pack_import_reject_duplicate",
+      "value": "已安装同名同版本的图标包"
+    },
+    {
+      "name": "cloud_sync_icon_pack_publication_unresolved",
+      "value": "发布状态未定，请重试；持续失败时可清除云端备份"
+    },
+    {
+      "name": "icon_pack_rematch_failed",
+      "value": "重新匹配图标失败"
     }
   ]
 }

@@ -1,59 +1,72 @@
-import { hilog } from '@kit.PerformanceAnalysisKit';
+import { common } from '@kit.AbilityKit';
+import { taskpool } from '@kit.ArkTS';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { AppPreference, PREF_KEYS } from './AppPreference';
-import { CloudBackupCrypto, CloudBackupRecord, CloudBackupTokenError } from './CloudBackupCrypto';
+import {
+  CloudBackupCrypto, CloudBackupRecord, CloudBackupMetadataStatus, CloudBackupIdentityStatus, CloudBackupTokenError,
+} from './CloudBackupCrypto';
+import {
+  CloudBackupDiagnostics, DiagnosticContext, DiagnosticKind, DiagnosticStage, DiagnosticResult,
+  DiagnosticReason, DiagnosticErrorDomain, DiagnosticScope,
+} from './CloudBackupDiagnostics';
+import { normalizeCloudBackupDeviceId } from './CloudBackupMetadata';
+import { CloudBackupOperationGate, CloudBackupOperationKind, CloudBackupOperationLease } from './CloudBackupOperationGate';
+import {
+  CloudBackupActionResult, CloudBackupFailureReason, CloudBackupHistoryResult, cloudBackupFailure,
+} from './CloudBackupResult';
+import { CloudBackupSyncService } from './CloudBackupSyncService';
+import { CloudBackupStaging } from './CloudBackupStaging';
+import {
+  CloudBackupPublicationGuard, CloudBackupPublicationPort, MemoryCloudBackupPublicationPort,
+  applyCloudPublicationIsolation,
+} from './CloudBackupPublicationGuard';
+import { CloudSyncFailureStage, CloudSyncFailureState } from './CloudSyncLastFailure';
+import { CloudFileCacher, CloudFileCacheLoader, prepareCloudFileRead } from './CloudFileCacheLoader';
+import { CloudBackupTaskHistory, loadBackupHistoryRecords, checkCloudBackupRecords } from './CloudSyncTask';
 import { TokenStore } from './TokenStore';
 import { TokenConfig, sanitizedTokenForBackup } from './TokenConfig';
 import { TokenGroup, TokenGroupStore } from './TokenGroupStore';
-import { cloudSync, fileUri } from '@kit.CoreFileKit';
-import { common } from '@kit.AbilityKit';
 import { DeviceInfoHelper } from './DeviceInfoHelper';
 import { HuaweiAccountManager } from './HuaweiAccountManager';
 import { SyncTimeHelper } from './SyncTimeHelper';
 import { TokenIconPacks } from './TokenUtils';
 import { IconPackCloudBackup, PackMetaEntry } from './IconPackCloudBackup';
-import { FsGateway, FileIoFsGateway } from './StoragePorts';
-import { BACKUP_FILE_EXT, BACKUP_FILE_PREFIX, isBackupFileName, parseBackupTimestamp } from './CommonUtils';
+import { FsGateway, FileIoFsGateway, fileIoDiagnosticCode } from './StoragePorts';
+import { BACKUP_FILE_EXT, BACKUP_FILE_PREFIX, parseBackupTimestamp } from './CommonUtils';
 
-const TAG = 'CloudBackupManager';
-const DOMAIN = 0xFF00;
 const MAX_BACKUP_COUNT = 5;
 
-/** 华为账号状态端口（生产：HuaweiAccountManager 单例）。 */
 export interface CloudBackupAccountPort {
   isUserLogin(): boolean;
   unionId(): string;
 }
 
-/** 设备标识端口（生产：DeviceInfoHelper 单例）。 */
 export interface CloudBackupDevicePort {
   deviceId(): string;
   deviceName(): string;
 }
 
-/** 令牌数据端口（生产：TokenStore 单例）。 */
 export interface CloudBackupTokenPort {
   getTokens(): Promise<TokenConfig[]>;
   updateToken(token: TokenConfig): Promise<void>;
 }
 
-/** 分组目录端口（生产：TokenGroupStore 单例）。 */
 export interface CloudBackupGroupPort {
   currentGroups(): TokenGroup[];
   merge(groups: TokenGroup[] | undefined): Promise<void>;
 }
 
-/** 图标包云备份端口（生产：IconPackCloudBackup 单例）。 */
 export interface CloudBackupIconPort {
-  backupIconPacks(): Promise<boolean>;
-  clearCloudBackup(): Promise<boolean>;
+  backupIconPacks(owner?: CloudBackupOperationLease, deferSync?: boolean, context?: DiagnosticContext): Promise<boolean>;
+  clearCloudBackup(owner?: CloudBackupOperationLease, deferSync?: boolean, context?: DiagnosticContext): Promise<boolean>;
+  clearCloudBackupForDevices?(deviceIds: string[], owner?: CloudBackupOperationLease,
+    deferSync?: boolean, context?: DiagnosticContext): Promise<boolean>;
 }
 
-/** 云端同步触发端口（生产：cloudSync.FileSync）。 */
 export interface CloudSyncStarter {
   start(): Promise<void>;
 }
 
-/** LocalUnit 测试注入项（cloudDir 就绪时跳过 init() 的 AppStorage 依赖）。 */
 export interface CloudBackupTestDeps {
   fs?: FsGateway;
   account?: CloudBackupAccountPort;
@@ -62,63 +75,47 @@ export interface CloudBackupTestDeps {
   groups?: CloudBackupGroupPort;
   icons?: CloudBackupIconPort;
   sync?: CloudSyncStarter;
+  cache?: CloudFileCacher;
   cloudDir?: string;
+  staging?: CloudBackupStaging;
+  publication?: CloudBackupPublicationPort;
+  /** Test the production TaskPool branch without calling native filesystem APIs. */
+  historyTask?: (root: string, context: DiagnosticContext) => Promise<CloudBackupTaskHistory>;
 }
 
 class HuaweiAccountAdapter implements CloudBackupAccountPort {
-  isUserLogin(): boolean {
-    return HuaweiAccountManager.getInstance().userLogin;
-  }
-
-  unionId(): string {
-    return HuaweiAccountManager.getInstance().userAccount.unionId;
-  }
+  isUserLogin(): boolean { return HuaweiAccountManager.getInstance().userLogin; }
+  unionId(): string { return HuaweiAccountManager.getInstance().userAccount.unionId; }
 }
 
 class DeviceInfoAdapter implements CloudBackupDevicePort {
-  deviceId(): string {
-    return DeviceInfoHelper.getInstance().getDeviceId();
-  }
-
-  deviceName(): string {
-    return DeviceInfoHelper.getInstance().getDeviceName();
-  }
+  deviceId(): string { return DeviceInfoHelper.getInstance().getDeviceId(); }
+  deviceName(): string { return DeviceInfoHelper.getInstance().getDeviceName(); }
 }
 
 class TokenStoreAdapter implements CloudBackupTokenPort {
-  async getTokens(): Promise<TokenConfig[]> {
-    return TokenStore.getInstance().getTokens();
-  }
-
-  async updateToken(token: TokenConfig): Promise<void> {
-    await TokenStore.getInstance().updateToken(token);
-  }
+  getTokens(): Promise<TokenConfig[]> { return TokenStore.getInstance().getTokens(); }
+  updateToken(token: TokenConfig): Promise<void> { return TokenStore.getInstance().updateToken(token); }
 }
 
 class TokenGroupStoreAdapter implements CloudBackupGroupPort {
-  currentGroups(): TokenGroup[] {
-    return TokenGroupStore.getInstance().state.groups;
-  }
-
-  merge(groups: TokenGroup[] | undefined): Promise<void> {
-    return TokenGroupStore.getInstance().merge(groups);
-  }
+  currentGroups(): TokenGroup[] { return TokenGroupStore.getInstance().state.groups; }
+  merge(groups: TokenGroup[] | undefined): Promise<void> { return TokenGroupStore.getInstance().merge(groups); }
 }
 
 class IconPackCloudBackupAdapter implements CloudBackupIconPort {
-  backupIconPacks(): Promise<boolean> {
-    return IconPackCloudBackup.getInstance().backupIconPacks();
+  backupIconPacks(owner?: CloudBackupOperationLease, deferSync?: boolean, context?: DiagnosticContext): Promise<boolean> {
+    return IconPackCloudBackup.getInstance().backupIconPacks(owner, deferSync, context);
   }
-
-  clearCloudBackup(): Promise<boolean> {
-    return IconPackCloudBackup.getInstance().clearCloudBackup();
+  clearCloudBackup(owner?: CloudBackupOperationLease, deferSync?: boolean, context?: DiagnosticContext): Promise<boolean> {
+    return IconPackCloudBackup.getInstance().clearCloudBackup(owner, deferSync, context);
+  }
+  clearCloudBackupForDevices(ids: string[], owner?: CloudBackupOperationLease,
+    deferSync?: boolean, context?: DiagnosticContext): Promise<boolean> {
+    return IconPackCloudBackup.getInstance().clearCloudBackupForDevices(ids, owner, deferSync, context);
   }
 }
 
-/**
- * 云备份载荷：将 TokenConfig[] 包装为结构化格式，附带图标包启用列表和元数据。
- * 旧格式（直接序列化为 TokenConfig[]）通过 restoreFromBackupRecord 中的 Array.isArray 检测兼容。
- */
 class CloudBackupPayload {
   tokens: TokenConfig[] = [];
   groups: TokenGroup[] = [];
@@ -126,695 +123,1151 @@ class CloudBackupPayload {
   packMeta: PackMetaEntry[] = [];
 }
 
-/**
- * 云端备份管理器
- *
- * 负责令牌数据在华为云空间的备份、恢复、清理等操作。
- *
- * ## 备份文件命名规则
- * `{BACKUP_FILE_PREFIX}{timestamp}{BACKUP_FILE_EXT}` → `otp_backup_{毫秒时间戳}.enc`
- *
- * ## 加密方案
- * 使用 {@link CloudBackupCrypto} 对明文 JSON 进行对称加密，
- * 密钥来源为华为账号 unionId，通过 `CloudBackupCryptoMode.AES256_GCM` 加密。
- *
- * ## 设备标识（ODID vs deviceName）
- * - **ODID**（`deviceInfo.ODID`）：开发者匿名设备标识符，应用卸载重装后会变化。
- * - **deviceName**（`deviceInfo.marketName`）：设备市场名称，卸载重装后不变。
- *
- * 基于上述差异，提供三种清理粒度：
- * 1. `clearDeviceCloudStorage()` — 按 ODID 匹配，清理当前安装实例产生的备份
- * 2. `clearDeviceNameCloudStorage()` — 按 deviceName 匹配且排除当前 ODID，清理卸载重装前遗留的旧备份
- * 3. `clearCloudStorage()` — 清理全部备份
- *
- * ## 端云协同约束（location）
- * stat.location：1=仅本地、2=仅云端（本地只有元数据桩，文件体在云上）、3=双份。
- * location=2 的文件读取内容或按本地路径删除前，必须先经 {@link cacheFile}
- * （cloudSync.CloudFileCache）缓存到本地，否则操作必失败；删除后由 FileSync 将
- * 删除动作同步到云端。清理操作按文件统计失败数，任一失败整体返回 false，
- * 避免向用户误报"清理成功"。
- *
- * ## 备份数量限制
- * 每台设备（按 ODID 区分）最多保留 {@link MAX_BACKUP_COUNT} 份备份，
- * 超出时自动删除最旧的一份。
- *
- * ## Phase 2 解耦
- * 文件系统经 {@link FsGateway} 端口、账号/设备/令牌/分组/图标包经各自端口访问，
- * LocalUnit 注入内存/假实现测试编排逻辑（见 docs/TEST_PLAN.md 第 4 节）。
- *
- * @module CloudBackupManager
- */
+interface CloudBackupRestorePayload {
+  tokens: TokenConfig[];
+  groups?: TokenGroup[];
+  enabledPacks: string[];
+}
+
+class BackupScanResult {
+  records: CloudBackupRecord[] = [];
+  complete: boolean = true;
+  blocked: boolean = false;
+}
+
+class PublicationCleanupResult {
+  drained: boolean = true;
+  syncAttempted: boolean = false;
+  syncStartAccepted: boolean = false;
+}
+
+/** 文件名是目录枚举的边界，不接受路径、额外后缀或部分可解析的时间戳。 */
+export function isSafeCloudBackupId(id: string): boolean {
+  return /^otp_backup_-?\d+\.enc(?![\s\S])/.test(id) && Number.isSafeInteger(parseBackupTimestamp(id));
+}
+
+function isFileAbsent(error: Object): boolean {
+  try { return (error as BusinessError).code === 13900002; } catch (_) { return false; }
+}
+
 export class CloudBackupManager {
   private static instance: CloudBackupManager | null = null;
   private context: common.UIAbilityContext | undefined = undefined;
   private cloudDir: string = '';
-  private fileSync: cloudSync.FileSync | null = null;
   private testDeps: CloudBackupTestDeps | null = null;
   private readonly productionFs: FsGateway = new FileIoFsGateway();
+  private pendingCleanupLease: CloudBackupOperationLease | undefined = undefined;
+  private lastFileTimestamp: number = -1;
+  private testPublication: MemoryCloudBackupPublicationPort | undefined = undefined;
+  private publicationGuard: CloudBackupPublicationGuard | undefined = undefined;
+  private publicationAccount: string = '';
+  private publicationRoot: string = '';
+  private publicationUnavailable: boolean = false;
+  private publicationPending: boolean = false;
 
-  private constructor() {
-  }
+  private constructor() {}
 
   static getInstance(): CloudBackupManager {
-    if (!CloudBackupManager.instance) {
-      CloudBackupManager.instance = new CloudBackupManager();
-    }
+    if (!CloudBackupManager.instance) CloudBackupManager.instance = new CloudBackupManager();
     return CloudBackupManager.instance;
   }
 
-  /** 测试注入：LocalUnit 下云文件/账号/设备 API 不可用，替换全部端口。 */
   useDepsForTest(deps: CloudBackupTestDeps): void {
+    if (this.testDeps?.fs !== deps.fs || this.testDeps?.publication !== deps.publication) {
+      this.testPublication = deps.publication === undefined && deps.fs !== undefined ?
+        new MemoryCloudBackupPublicationPort(deps.fs) : undefined;
+    }
+    this.publicationGuard = undefined;
     this.testDeps = deps;
     if (deps.cloudDir !== undefined && deps.cloudDir.length > 0) {
-      // 语义上 context/cloudDir 已就绪：init() 直接短路，不再读 AppStorage
       this.context = new Object() as common.UIAbilityContext;
       this.cloudDir = deps.cloudDir;
     }
   }
 
-  /** 测试复位：恢复生产端口与未初始化状态（与 IconPackCloudBackup.resetForTest 对称，防单例跨套件污染）。 */
   resetForTest(): void {
+    if (this.pendingCleanupLease !== undefined) {
+      this.pendingCleanupLease.resolveUnknownIo();
+      this.pendingCleanupLease.release();
+    }
+    this.pendingCleanupLease = undefined;
     this.testDeps = null;
     this.context = undefined;
     this.cloudDir = '';
-    this.fileSync = null;
+    this.lastFileTimestamp = -1;
+    this.testPublication = undefined;
+    this.publicationGuard = undefined;
+    this.publicationAccount = '';
+    this.publicationRoot = '';
+    this.publicationUnavailable = false;
+    this.publicationPending = false;
   }
 
-  private get fsPort(): FsGateway {
-    return this.testDeps?.fs !== undefined ? this.testDeps.fs : this.productionFs;
+  private get fsPort(): FsGateway { return this.testDeps?.fs ?? this.productionFs; }
+  private get accountPort(): CloudBackupAccountPort { return this.testDeps?.account ?? new HuaweiAccountAdapter(); }
+  private get devicePort(): CloudBackupDevicePort { return this.testDeps?.device ?? new DeviceInfoAdapter(); }
+  private get tokenPort(): CloudBackupTokenPort { return this.testDeps?.tokens ?? new TokenStoreAdapter(); }
+  private get groupPort(): CloudBackupGroupPort { return this.testDeps?.groups ?? new TokenGroupStoreAdapter(); }
+  private get iconPort(): CloudBackupIconPort { return this.testDeps?.icons ?? new IconPackCloudBackupAdapter(); }
+  private get crypto(): CloudBackupCrypto { return CloudBackupCrypto.getInstance(); }
+  private async staging(): Promise<CloudBackupStaging | undefined> {
+    if (this.testDeps !== null) return this.testDeps.staging;
+    if (this.context === undefined) throw new Error('STAGING_CONTEXT_UNAVAILABLE');
+    return CloudBackupStaging.production(this.cloudDir, this.context.filesDir, this.accountPort.unionId());
+  }
+  private async publication(): Promise<CloudBackupPublicationGuard> {
+    const account = this.accountPort.unionId();
+    if (!account && this.testDeps === null) throw new Error('PUBLICATION_ACCOUNT_UNAVAILABLE');
+    if (this.publicationGuard !== undefined && this.publicationAccount === account &&
+      this.publicationRoot === this.cloudDir) return this.publicationGuard;
+    const port = this.testDeps?.publication ?? this.testPublication;
+    const guard = this.testDeps !== null ?
+      new CloudBackupPublicationGuard(this.cloudDir, account || 'test-no-account', port!) :
+      await CloudBackupPublicationGuard.production(this.cloudDir, this.context!.filesDir, account);
+    if (this.testDeps !== null && port === undefined) throw new Error('PUBLICATION_PORT_UNAVAILABLE');
+    this.publicationGuard = guard;
+    this.publicationAccount = account;
+    this.publicationRoot = this.cloudDir;
+    return guard;
   }
 
-  private get accountPort(): CloudBackupAccountPort {
-    return this.testDeps?.account !== undefined ? this.testDeps.account : new HuaweiAccountAdapter();
+  /** Must precede staging.create/recover: staging cleanup would destroy non-publication evidence. */
+  private async preparePublication(context: DiagnosticContext): Promise<boolean> {
+    if (this.cacher?.isCleanupPending?.()) return false;
+    try {
+      const guard = await this.publication();
+      if (!await guard.recover(context)) {
+        this.publicationUnavailable = true;
+        return false;
+      }
+      this.publicationUnavailable = false;
+      this.publicationPending = guard.hasRejectedCleanup();
+      return true;
+    } catch (error) {
+      this.publicationUnavailable = true;
+      CloudBackupDiagnostics.fail(context, DiagnosticStage.PUBLICATION_GUARD,
+        DiagnosticErrorDomain.FS, fileIoDiagnosticCode(error));
+      return false;
+    }
   }
 
-  private get devicePort(): CloudBackupDevicePort {
-    return this.testDeps?.device !== undefined ? this.testDeps.device : new DeviceInfoAdapter();
+  /** Only a durable confirmed-move REJECTED receipt authorizes automatic unlink. */
+  private async cleanupPublications(context: DiagnosticContext): Promise<PublicationCleanupResult> {
+    const result = new PublicationCleanupResult();
+    try {
+      const guard = await this.publication();
+      const cleaned: string[] = [];
+      for (const receipt of guard.rejected()) {
+        const deletion = await this.deleteBackupFile(receipt.fileName, context);
+        if (deletion.success) cleaned.push(receipt.id);
+        else result.drained = false;
+      }
+      // Never acknowledge failed unlinks merely because unrelated sync was accepted.
+      if (cleaned.length > 0) {
+        result.syncAttempted = true;
+        result.syncStartAccepted = await this.syncToCloud(context);
+        if (result.syncStartAccepted) {
+          for (const id of cleaned) await guard.acknowledgeRejected(id, context);
+        } else result.drained = false;
+      }
+      this.publicationPending = guard.hasRejectedCleanup();
+      result.drained = result.drained && !this.publicationPending;
+    } catch (error) {
+      result.drained = false;
+      this.publicationUnavailable = true;
+      CloudBackupDiagnostics.fail(context, DiagnosticStage.PUBLICATION_CLEANUP,
+        DiagnosticErrorDomain.FS, fileIoDiagnosticCode(error));
+    }
+    CloudBackupDiagnostics.mark(context, DiagnosticStage.PUBLICATION_CLEANUP,
+      result.drained ? DiagnosticResult.OK : DiagnosticResult.FAIL,
+      { drained: result.drained, partialFailure: !result.drained, syncStartAccepted: result.syncStartAccepted,
+        reason: result.drained ? DiagnosticReason.NONE : DiagnosticReason.IO_ERROR });
+    return result;
   }
 
-  private get tokenPort(): CloudBackupTokenPort {
-    return this.testDeps?.tokens !== undefined ? this.testDeps.tokens : new TokenStoreAdapter();
+  private get cacher(): CloudFileCacher | undefined {
+    return this.testDeps !== null ? this.testDeps.cache : CloudFileCacheLoader.getInstance();
   }
 
-  private get groupPort(): CloudBackupGroupPort {
-    return this.testDeps?.groups !== undefined ? this.testDeps.groups : new TokenGroupStoreAdapter();
-  }
-
-  private get iconPort(): CloudBackupIconPort {
-    return this.testDeps?.icons !== undefined ? this.testDeps.icons : new IconPackCloudBackupAdapter();
-  }
-
-  /** 每次调用时取加密实例：测试用 useEngineForTest 替换单例后这里拿到的就是新实例。 */
-  private get crypto(): CloudBackupCrypto {
-    return CloudBackupCrypto.getInstance();
-  }
-
-  /** 初始化云备份管理器：获取 UIAbilityContext、确保云端目录存在。幂等，重复调用安全。 */
   async init(): Promise<void> {
-    if (this.context) {
-      return;
-    }
-    this.context = AppStorage.get<common.UIAbilityContext>('appContext') as common.UIAbilityContext;
-    if (!this.context) {
-      hilog.error(DOMAIN, TAG, 'init: failed to get appContext');
-      return;
-    }
-
+    if (this.context && this.cloudDir) return;
+    const context = AppStorage.get<common.UIAbilityContext>('appContext');
+    if (!context) return;
     try {
-      this.cloudDir = this.context.cloudFileDir;
-      hilog.info(DOMAIN, TAG, `init: cloudDir=${this.cloudDir}`);
-      await this.ensureCloudDirExists();
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `init: error=${JSON.stringify(e)}`);
-    }
-  }
-
-  /** 确保云端备份目录存在，不存在则递归创建 */
-  private async ensureCloudDirExists(): Promise<void> {
-    try {
-      const stat = await this.fsPort.stat(this.cloudDir);
-      hilog.info(DOMAIN, TAG, `ensureCloudDirExists: exists, location=${stat.location}`);
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, `ensureCloudDirExists: not exist, creating`);
+      const dir = context.cloudFileDir;
+      if (!dir) return;
       try {
-        await this.fsPort.makeDir(this.cloudDir);
-        hilog.info(DOMAIN, TAG, 'ensureCloudDirExists: created');
-      } catch (err) {
-        hilog.error(DOMAIN, TAG, `ensureCloudDirExists: create error=${JSON.stringify(err)}`);
+        const stat = await this.fsPort.stat(dir);
+        if (!stat.isDirectory) return;
+      } catch (error) {
+        if (!isFileAbsent(error)) return;
+        await this.fsPort.makeDir(dir);
       }
+      this.context = context;
+      this.cloudDir = dir;
+    } catch (_) {
+      this.context = undefined;
+      this.cloudDir = '';
+    }
+  }
+
+  isBusy(): boolean { return CloudBackupOperationGate.getInstance().isBusy(); }
+
+  isCleanupPending(): boolean {
+    return this.publicationUnavailable ||
+      this.cacher?.isCleanupPending?.() === true || this.pendingCleanupLease !== undefined ||
+      (this.testDeps === null && IconPackCloudBackup.getInstance().isCleanupPending());
+  }
+
+  async retryPendingCleanup(): Promise<boolean> {
+    const cache = this.cacher;
+    const context = CloudBackupDiagnostics.begin(DiagnosticKind.CACHE);
+    let recoveryOwner: CloudBackupOperationLease | undefined = this.pendingCleanupLease;
+    if (recoveryOwner === undefined) recoveryOwner = CloudBackupOperationGate.getInstance().tryEnter(CloudBackupOperationKind.HISTORY);
+    if (recoveryOwner === undefined) {
+      CloudBackupDiagnostics.end(context);
+      return false;
+    }
+    try {
+      if (cache?.isCleanupPending?.()) {
+        if (cache.retryCleanup === undefined || !await cache.retryCleanup()) return false;
+      }
+      if (this.testDeps === null && !await IconPackCloudBackup.getInstance().retryPendingCleanup()) return false;
+      recoveryOwner.resolveUnknownIo();
+      this.pendingCleanupLease = undefined;
+      if (await this.ready() !== CloudBackupFailureReason.NONE || !await this.preparePublication(context)) return false;
+      const cleanup = await this.cleanupPublications(context);
+      if (!(await this.publication()).isAvailable()) return false;
+      const staged = await this.staging();
+      const stageCleaned = staged === undefined || await staged.recover(context);
+      if (!cleanup.drained || !stageCleaned) return false;
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.CACHE_DRAIN, DiagnosticResult.OK, { drained: true });
+      return true;
+    } catch (_) {
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.CACHE_DRAIN, DiagnosticResult.FAIL,
+        { reason: DiagnosticReason.INFLIGHT_UNCONFIRMED, drained: false });
+      return false;
+    } finally {
+      this.finishLease(recoveryOwner);
+      CloudBackupDiagnostics.end(context);
+    }
+  }
+
+  private finishLease(owner: CloudBackupOperationLease): void {
+    if (owner.isCleanupPending() || this.cacher?.isCleanupPending?.()) {
+      owner.retainUnknownIo();
+      this.pendingCleanupLease = owner;
+    } else {
+      owner.release();
+    }
+  }
+
+  private async ready(): Promise<CloudBackupFailureReason> {
+    await this.init();
+    if (!this.context || !this.cloudDir) return CloudBackupFailureReason.NOT_READY;
+    if (!this.accountPort.isUserLogin()) return CloudBackupFailureReason.NOT_SIGNED_IN;
+    return CloudBackupFailureReason.NONE;
+  }
+
+  private diagnosticReason(reason: CloudBackupFailureReason): DiagnosticReason {
+    switch (reason) {
+      case CloudBackupFailureReason.NONE: return DiagnosticReason.NONE;
+      case CloudBackupFailureReason.NOT_READY: return DiagnosticReason.NOT_READY;
+      case CloudBackupFailureReason.NOT_SIGNED_IN: return DiagnosticReason.NOT_SIGNED_IN;
+      case CloudBackupFailureReason.BUSY: return DiagnosticReason.BUSY;
+      case CloudBackupFailureReason.CLEANUP_PENDING: return DiagnosticReason.INFLIGHT_UNCONFIRMED;
+      case CloudBackupFailureReason.IDENTITY_UNAVAILABLE: return DiagnosticReason.IDENTITY_UNAVAILABLE;
+      case CloudBackupFailureReason.INVALID_TARGET: return DiagnosticReason.INVALID_ARGUMENT;
+      case CloudBackupFailureReason.FORMAT_INVALID: return DiagnosticReason.INVALID_FORMAT;
+      case CloudBackupFailureReason.DECRYPT_FAILED: return DiagnosticReason.DECRYPT_FAILED;
+      case CloudBackupFailureReason.READ_FAILED:
+      case CloudBackupFailureReason.WRITE_FAILED:
+      case CloudBackupFailureReason.DELETE_FAILED: return DiagnosticReason.IO_ERROR;
+      case CloudBackupFailureReason.SYNC_FAILED: return DiagnosticReason.SYNC_REJECTED;
+      case CloudBackupFailureReason.ICON_FAILED: return DiagnosticReason.UNAVAILABLE;
+      case CloudBackupFailureReason.POST_VERIFY_FAILED: return DiagnosticReason.MISMATCH;
+      default: return DiagnosticReason.UNKNOWN;
+    }
+  }
+
+  private blockedReason(): CloudBackupFailureReason {
+    return this.isCleanupPending() ? CloudBackupFailureReason.CLEANUP_PENDING : CloudBackupFailureReason.BUSY;
+  }
+
+  private async runAction(kind: CloudBackupOperationKind, diagnosticKind: DiagnosticKind,
+    terminal: DiagnosticStage,
+    action: (owner: CloudBackupOperationLease, context: DiagnosticContext) => Promise<CloudBackupActionResult>):
+    Promise<CloudBackupActionResult> {
+    const context = CloudBackupDiagnostics.begin(diagnosticKind);
+    // 在门禁、初始化或读取失败之前也能定位恢复请求，且整次动作共用一个上下文。
+    if (kind === CloudBackupOperationKind.RESTORE) {
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.RESTORE_BEGIN, DiagnosticResult.BEGIN);
+    }
+    const owner = CloudBackupOperationGate.getInstance().tryEnter(kind);
+    if (owner === undefined) {
+      const reason = this.blockedReason();
+      CloudBackupDiagnostics.mark(context, terminal, DiagnosticResult.BLOCKED, { reason: this.diagnosticReason(reason) });
+      CloudBackupDiagnostics.end(context);
+      return cloudBackupFailure(reason);
+    }
+    try {
+      const readiness = await this.ready();
+      if (readiness !== CloudBackupFailureReason.NONE) {
+        CloudBackupDiagnostics.mark(context, terminal, DiagnosticResult.BLOCKED, { reason: this.diagnosticReason(readiness) });
+        return cloudBackupFailure(readiness);
+      }
+      if (!await this.preparePublication(context)) {
+        if (this.cacher?.isCleanupPending?.()) owner.retainUnknownIo();
+        CloudBackupDiagnostics.mark(context, terminal, DiagnosticResult.BLOCKED,
+          { reason: DiagnosticReason.UNAVAILABLE });
+        return cloudBackupFailure(CloudBackupFailureReason.CLEANUP_PENDING);
+      }
+      const result = await action(owner, context);
+      if (owner.isCleanupPending() || this.cacher?.isCleanupPending?.()) {
+        result.success = false;
+        result.reason = CloudBackupFailureReason.CLEANUP_PENDING;
+      }
+      CloudBackupDiagnostics.mark(context, terminal, result.success ? DiagnosticResult.OK : DiagnosticResult.FAIL,
+        { reason: this.diagnosticReason(result.reason), partialFailure: result.partialFailure,
+          syncStartAccepted: result.syncStartAccepted });
+      return result;
+    } catch (_) {
+      CloudBackupDiagnostics.mark(context, terminal, DiagnosticResult.FAIL, { reason: DiagnosticReason.UNKNOWN });
+      return cloudBackupFailure(CloudBackupFailureReason.UNKNOWN);
+    } finally {
+      this.finishLease(owner);
+      CloudBackupDiagnostics.end(context);
+    }
+  }
+
+  async backupToCloud(): Promise<boolean> { return (await this.backupToCloudResult()).success; }
+
+  async backupToCloudResult(): Promise<CloudBackupActionResult> {
+    return this.runAction(CloudBackupOperationKind.BACKUP, DiagnosticKind.BACKUP, DiagnosticStage.BACKUP_END,
+      async (owner: CloudBackupOperationLease, context: DiagnosticContext): Promise<CloudBackupActionResult> => {
+        return this.performBackupToCloud(owner, context);
+      });
+  }
+
+  /** 失败阶段 → 持久化失败状态键的阶段枚举映射。 */
+  private backupFailureStageOfPhase(phase: DiagnosticStage): CloudSyncFailureStage {
+    switch (phase) {
+      case DiagnosticStage.WRITE_END: return CloudSyncFailureStage.WRITE;
+      case DiagnosticStage.FS_VERIFY: return CloudSyncFailureStage.STAGED_VERIFY;
+      case DiagnosticStage.PUBLISH_END:
+      case DiagnosticStage.PUBLICATION_GUARD: return CloudSyncFailureStage.PUBLISH;
+      default: return CloudSyncFailureStage.UNKNOWN;
+    }
+  }
+
+  /** 汇总阶段原因 → 失败状态键的阶段枚举映射（轮换/图标/同步在发布之后收口）。 */
+  private backupFailureStageOfReason(reason: CloudBackupFailureReason): CloudSyncFailureStage {
+    switch (reason) {
+      case CloudBackupFailureReason.ICON_FAILED: return CloudSyncFailureStage.ICON;
+      case CloudBackupFailureReason.SYNC_FAILED: return CloudSyncFailureStage.SYNC;
+      case CloudBackupFailureReason.DELETE_FAILED:
+      case CloudBackupFailureReason.CLEANUP_PENDING: return CloudSyncFailureStage.ROTATE;
+      default: return CloudSyncFailureStage.UNKNOWN;
     }
   }
 
   /**
-   * 将令牌数据备份到华为云空间
-   *
-   * 流程：初始化 → 加密 → 写文件 → 清理超限旧备份 → 触发 FileSync 同步 → 记录时间戳
-   * @returns 是否成功
+   * 单次备份尝试的完整管线。写入链路错误零容忍：失败出口都先落
+   * CLOUD_SYNC_LAST_FAILURE 失败状态键（详情页持久展示），再返回整体失败。
+   * 例外：管线开工前的环境阻断（cacher cleanup-pending 早退）与被门禁/登录态
+   * 阻断的尝试一样不落键——避免用环境状态覆盖既有真实失败记录。
    */
-  async backupToCloud(): Promise<boolean> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      hilog.error(DOMAIN, TAG, 'backupToCloud: not initialized');
-      return false;
+  private async performBackupToCloud(owner: CloudBackupOperationLease,
+    context: DiagnosticContext): Promise<CloudBackupActionResult> {
+    CloudBackupDiagnostics.mark(context, DiagnosticStage.BACKUP_BEGIN, DiagnosticResult.BEGIN);
+    const guard = await this.publication();
+    await this.cleanupPublications(context);
+    if (!guard.isAvailable()) return cloudBackupFailure(CloudBackupFailureReason.CLEANUP_PENDING);
+    if (this.testDeps?.device === undefined) DeviceInfoHelper.getInstance().refreshRequiredInfo();
+    const deviceId = normalizeCloudBackupDeviceId(this.devicePort.deviceId());
+    const deviceName = this.devicePort.deviceName().trim();
+    CloudBackupDiagnostics.mark(context, DiagnosticStage.DEVICE_INFO, DiagnosticResult.OK,
+      { identityAvailable: deviceId.length > 0, nameAvailable: deviceName.length > 0 });
+    if (!deviceId) {
+      CloudSyncFailureState.record(CloudSyncFailureStage.DEVICE_INFO, CloudBackupFailureReason.IDENTITY_UNAVAILABLE);
+      return cloudBackupFailure(CloudBackupFailureReason.IDENTITY_UNAVAILABLE);
     }
-
-    if (!this.accountPort.isUserLogin()) {
-      hilog.warn(DOMAIN, TAG, 'backupToCloud: Huawei account not logged in, aborting');
-      return false;
-    }
-
-    const encryptKey = this.accountPort.unionId();
-    const mode = this.crypto.getMode(true);
-    const deviceId = this.devicePort.deviceId();
-    const deviceName = this.devicePort.deviceName();
-
-    hilog.info(DOMAIN, TAG, `backupToCloud: starting backup, mode=${mode}`);
-
-    // 构造 CloudBackupPayload：包含令牌、图标包启用列表、图标包元数据
-    // 注意：载荷会被序列化后上传云端，必须剥离 Steam 高权限凭证
-    // （identity_secret / refresh_token / revocation_code），TokenSecret 保留以便恢复后显示动态码
-    const tokens = await this.tokenPort.getTokens();
-    const enabledPacks = TokenIconPacks.enabled_packs;
+    // 令牌/分组快照读取失败同样是备份失败，不向用户抛未处理异常。
     const payload = new CloudBackupPayload();
-    payload.tokens = tokens.map((token: TokenConfig): TokenConfig => sanitizedTokenForBackup(token));
-    payload.groups = [...this.groupPort.currentGroups()];
-    payload.enabledPacks = enabledPacks;
-    const metaList: PackMetaEntry[] = [];
-    for (const p of TokenIconPacks.aegis_icon_packs) {
-      const m = new PackMetaEntry();
-      m.uuid = p.uuid;
-      m.name = p.name;
-      m.version = p.version;
-      m.iconCount = p.icons.length;
-      metaList.push(m);
+    let snapshotCount = 0;
+    try {
+      const tokens = await this.tokenPort.getTokens();
+      snapshotCount = tokens.length;
+      payload.tokens = tokens.map((token: TokenConfig): TokenConfig => sanitizedTokenForBackup(token));
+      payload.groups = [...this.groupPort.currentGroups()];
+      payload.enabledPacks = [...TokenIconPacks.enabled_packs];
+      for (const pack of TokenIconPacks.aegis_icon_packs) {
+        const meta = new PackMetaEntry();
+        meta.uuid = pack.uuid;
+        meta.name = pack.name;
+        meta.version = pack.version;
+        meta.iconCount = pack.icons.length;
+        payload.packMeta.push(meta);
+      }
+    } catch (_) {
+      CloudSyncFailureState.record(CloudSyncFailureStage.SNAPSHOT, CloudBackupFailureReason.READ_FAILED);
+      return cloudBackupFailure(CloudBackupFailureReason.READ_FAILED);
     }
-    payload.packMeta = metaList;
-    const plaintext = JSON.stringify(payload);
-    const now = Date.now();
-
-    hilog.info(DOMAIN, TAG, `backupToCloud: token count=${tokens.length}`);
-
-    const token = await this.crypto.encrypt(
-      plaintext, mode, encryptKey,
-      tokens.length, now,
-      deviceId, deviceName,
-    );
-
-    hilog.info(DOMAIN, TAG, `backupToCloud: token size=${token.length}`);
-
+    const now = Math.max(Date.now(), this.lastFileTimestamp + 1);
+    this.lastFileTimestamp = now;
+    let content: string;
+    try {
+      content = await this.crypto.encrypt(JSON.stringify(payload), this.crypto.getMode(true),
+        this.accountPort.unionId(), snapshotCount, now, deviceId, deviceName, context);
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.ENCRYPT_END, DiagnosticResult.OK);
+    } catch (_) {
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.ENCRYPT_END, DiagnosticResult.FAIL);
+      CloudSyncFailureState.record(CloudSyncFailureStage.ENCRYPT, CloudBackupFailureReason.FORMAT_INVALID);
+      return cloudBackupFailure(CloudBackupFailureReason.FORMAT_INVALID);
+    }
     const fileName = `${BACKUP_FILE_PREFIX}${now}${BACKUP_FILE_EXT}`;
-    const filePath = `${this.cloudDir}/${fileName}`;
-
+    let tempPath = `${this.cloudDir}/.otp_backup_pending_${now}.tmp`;
+    let tempOwned = false;
+    let staged: CloudBackupStaging | undefined = undefined;
+    let published = false;
+    let candidate = '';
+    let preserveSource = false;
+    let cleanupFailed = false;
+    let phase = DiagnosticStage.WRITE_END;
+    let failureReason = DiagnosticReason.IO_ERROR;
     try {
-      await this.fsPort.writeTextFile(filePath, token);
-      hilog.info(DOMAIN, TAG, `backupToCloud: wrote ${token.length} chars to ${fileName}`);
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `backupToCloud: write error=${JSON.stringify(e)}`);
-      return false;
-    }
-
-    const records = await this.listBackupRecords();
-    const deviceRecords = records.filter(r => r.deviceId === deviceId);
-    if (deviceRecords.length > MAX_BACKUP_COUNT) {
-      const oldestRecord = deviceRecords[deviceRecords.length - 1];
-      hilog.info(DOMAIN, TAG, `backupToCloud: max count reached, deleting oldest ${oldestRecord.id}`);
-      await this.deleteBackupFile(oldestRecord.id);
-    }
-
-    await this.syncToCloud();
-
-    AppPreference.setPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME, `${now}`);
-
-    hilog.info(DOMAIN, TAG, 'backupToCloud: completed successfully');
-
-    // 图标包文件备份：fire-and-forget，不阻塞 token 备份成功返回
-    this.iconPort.backupIconPacks().then((iconResult) => {
-      hilog.info(DOMAIN, TAG, `backupToCloud: icon pack backup result=${iconResult}`);
-    }).catch((err: Error) => {
-      hilog.error(DOMAIN, TAG, `backupToCloud: icon pack backup failed: ${err.message}`);
-    });
-
-    return true;
-  }
-
-  /**
-   * 从云端恢复最新的备份数据
-   *
-   * 解密后逐条调用令牌端口写入本地 KV。
-   * @returns 是否成功
-   */
-  async restoreFromCloud(): Promise<boolean> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      hilog.error(DOMAIN, TAG, 'restoreFromCloud: not initialized');
-      return false;
-    }
-
-    if (!this.accountPort.isUserLogin()) {
-      hilog.warn(DOMAIN, TAG, 'restoreFromCloud: Huawei account not logged in, aborting');
-      return false;
-    }
-
-    hilog.info(DOMAIN, TAG, 'restoreFromCloud: starting restore');
-
-    const records = await this.listBackupRecords();
-    if (records.length === 0) {
-      hilog.warn(DOMAIN, TAG, 'restoreFromCloud: no backup records found');
-      return false;
-    }
-
-    const latestRecord = records[0];
-    return await this.restoreFromBackupRecord(latestRecord.id);
-  }
-
-  /** 清理云端所有设备的全部备份数据；任一文件删除失败返回 false（部分成功不报成功） */
-  async clearCloudStorage(): Promise<boolean> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      hilog.error(DOMAIN, TAG, 'clearCloudStorage: not initialized');
-      return false;
-    }
-
-    if (!this.accountPort.isUserLogin()) {
-      hilog.warn(DOMAIN, TAG, 'clearCloudStorage: Huawei account not logged in, aborting');
-      return false;
-    }
-
-    hilog.info(DOMAIN, TAG, 'clearCloudStorage: clearing');
-
-    try {
-      const records = await this.listBackupRecords();
-      let failed = 0;
-      for (const record of records) {
-        if (!await this.deleteBackupFile(record.id)) {
-          failed++;
-        }
+      if (this.cacher?.isCleanupPending?.()) return cloudBackupFailure(CloudBackupFailureReason.CLEANUP_PENDING);
+      staged = await this.staging();
+      // 生产密文先登记本地凭据；测试旧端口仍只有成功返回后才获得精确目标所有权。
+      if (staged !== undefined) tempPath = await staged.create(content, context);
+      else await this.fsPort.writeNewTextFile(tempPath, content, context);
+      tempOwned = true;
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.WRITE_END, DiagnosticResult.OK,
+        { contentNonEmpty: content.length > 0, writeComplete: true });
+      phase = DiagnosticStage.FS_VERIFY;
+      const actual = await this.fsPort.readTextFile(tempPath, context);
+      failureReason = DiagnosticReason.INVALID_FORMAT;
+      if (actual !== content || actual.length === 0) throw new Error('BACKUP_VERIFY_FAILED');
+      this.crypto.parseTokenHeader(actual, context);
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.FS_VERIFY, DiagnosticResult.OK,
+        { contentNonEmpty: true, writeComplete: true, headerParsed: true });
+      phase = DiagnosticStage.PUBLICATION_GUARD;
+      failureReason = DiagnosticReason.IO_ERROR;
+      // Durable candidate precedes the formal move, so process death is fail-closed.
+      preserveSource = true;
+      candidate = await guard.register(tempPath, fileName, context);
+      preserveSource = false;
+      phase = DiagnosticStage.PUBLISH_END;
+      if (staged !== undefined) await staged.publish(tempPath, `${this.cloudDir}/${fileName}`, context);
+      else await this.fsPort.publishFile(tempPath, `${this.cloudDir}/${fileName}`, context);
+      published = true;
+      if (staged === undefined) tempOwned = false;
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.PUBLISH_END, DiagnosticResult.OK);
+      phase = DiagnosticStage.PUBLICATION_GUARD;
+      await guard.published(candidate, context);
+    } catch (_) {
+      // 原生详细错误由 StoragePorts 报告；此处只补准确阶段，不重复原始异常。
+      CloudBackupDiagnostics.mark(context, phase, DiagnosticResult.FAIL, { reason: failureReason });
+      if (!published && candidate !== '') {
+        // A collision must be cancelled while the source still proves no publication.
+        try { await guard.cancelUnpublished(candidate, context); } catch (_) { preserveSource = true; }
       }
-      await this.syncToCloud();
-      if (failed > 0) {
-        hilog.error(DOMAIN, TAG, `clearCloudStorage: ${failed}/${records.length} deletions failed`);
-        return false;
-      }
-      AppPreference.setPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME, '0');
-      // 同步清除图标包云端备份（fire-and-forget）
-      this.iconPort.clearCloudBackup();
-      hilog.info(DOMAIN, TAG, 'clearCloudStorage: completed');
-      return true;
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `clearCloudStorage: error=${JSON.stringify(e)}`);
-      return false;
-    }
-  }
-
-  /** 清理云端当前 ODID 匹配的备份数据（仅当前安装实例产生的备份） */
-  async clearDeviceCloudStorage(): Promise<boolean> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      hilog.error(DOMAIN, TAG, 'clearDeviceCloudStorage: not initialized');
-      return false;
-    }
-
-    if (!this.accountPort.isUserLogin()) {
-      hilog.warn(DOMAIN, TAG, 'clearDeviceCloudStorage: Huawei account not logged in, aborting');
-      return false;
-    }
-
-    const deviceId = this.devicePort.deviceId();
-    hilog.info(DOMAIN, TAG, `clearDeviceCloudStorage: clearing device=${deviceId}`);
-
-    try {
-      const records = await this.listBackupRecords();
-      const deviceRecords = records.filter((r: CloudBackupRecord) => r.deviceId === deviceId);
-      // header 未解析（deviceId 为空，如离线未缓存成功的 location=2 文件）的记录
-      // 无法确认归属、可能属于本设备：计入失败迫使重试，避免静默残留后误报成功
-      let failed = records.filter((r: CloudBackupRecord) => r.deviceId === '').length;
-      for (const record of deviceRecords) {
-        if (!await this.deleteBackupFile(record.id)) {
-          failed++;
-        }
-      }
-      await this.syncToCloud();
-      if (failed > 0) {
-        hilog.error(DOMAIN, TAG, `clearDeviceCloudStorage: ${failed} unresolved/failed of ${records.length}`);
-        return false;
-      }
-      AppPreference.setPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME, '0');
-      // 同步清除图标包云端备份（fire-and-forget）
-      this.iconPort.clearCloudBackup();
-      hilog.info(DOMAIN, TAG, `clearDeviceCloudStorage: completed, deleted ${deviceRecords.length}`);
-      return true;
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `clearDeviceCloudStorage: error=${JSON.stringify(e)}`);
-      return false;
-    }
-  }
-
-  /**
-   * 清理云端同名设备（deviceName）但不同 ODID 的备份
-   *
-   * 适用场景：应用卸载重装后 ODID 变化，旧的按 ODID 匹配无法找到卸载前产生的备份，
-   * 通过 deviceName 匹配可清理这些遗留备份，同时排除当前 ODID 的备份。
-   */
-  async clearDeviceNameCloudStorage(): Promise<boolean> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      hilog.error(DOMAIN, TAG, 'clearDeviceNameCloudStorage: not initialized');
-      return false;
-    }
-
-    if (!this.accountPort.isUserLogin()) {
-      hilog.warn(DOMAIN, TAG, 'clearDeviceNameCloudStorage: Huawei account not logged in, aborting');
-      return false;
-    }
-
-    const currentDeviceId = this.devicePort.deviceId();
-    const currentDeviceName = this.devicePort.deviceName();
-    hilog.info(DOMAIN, TAG, `clearDeviceNameCloudStorage: name=${currentDeviceName}, excluding odid=${currentDeviceId}`);
-
-    try {
-      const records = await this.listBackupRecords();
-      const staleRecords = records.filter((r: CloudBackupRecord) =>
-        r.deviceName === currentDeviceName && r.deviceId !== currentDeviceId
-      );
-      // 同上：header 未解析（deviceName 为空）的记录无法确认是否为同名旧安装
-      // 遗留（其主场景恰是本机的 location=2 云端文件），计入失败迫使重试
-      let failed = records.filter((r: CloudBackupRecord) => r.deviceName === '').length;
-      for (const record of staleRecords) {
-        if (!await this.deleteBackupFile(record.id)) {
-          failed++;
-        }
-      }
-      await this.syncToCloud();
-      if (failed > 0) {
-        hilog.error(DOMAIN, TAG, `clearDeviceNameCloudStorage: ${failed} unresolved/failed of ${records.length}`);
-        return false;
-      }
-      if (staleRecords.length > 0) {
-        // 仅在全部删除成功时才清除图标包备份（避免不必要的云操作）
-        this.iconPort.clearCloudBackup();
-      }
-      hilog.info(DOMAIN, TAG, `clearDeviceNameCloudStorage: completed, deleted ${staleRecords.length}`);
-      return true;
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `clearDeviceNameCloudStorage: error=${JSON.stringify(e)}`);
-      return false;
-    }
-  }
-
-  /** 获取云端备份记录列表，按时间戳降序排列 */
-  async listBackupHistory(): Promise<CloudBackupRecord[]> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      hilog.error(DOMAIN, TAG, 'listBackupHistory: not initialized');
-      return [];
-    }
-
-    return await this.listBackupRecords();
-  }
-
-  /**
-   * 将云端仅存（location=2）的备份文件预缓存到本地。
-   * 备份历史的 header 解析在 TaskPool 子线程执行，不便调用 cloudSync，
-   * 由主线程先完成云端文件下载，TaskPool 随后按本地文件正常读取。
-   * 缓存失败（如离线）不抛出，仅记录日志，交由后续解析降级兜底。
-   */
-  async cacheCloudOnlyBackups(): Promise<void> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      hilog.warn(DOMAIN, TAG, 'cacheCloudOnlyBackups: not initialized');
-      return;
-    }
-
-    try {
-      const files = await this.fsPort.listFiles(this.cloudDir);
-      for (const fileName of files) {
-        if (!isBackupFileName(fileName)) {
-          continue;
-        }
-        const filePath = `${this.cloudDir}/${fileName}`;
-        try {
-          const stat = await this.fsPort.stat(filePath);
-          if (stat.location === 2) {
-            await this.cacheFile(filePath);
+      this.publicationUnavailable = !guard.isAvailable();
+      this.publicationPending = guard.hasRejectedCleanup();
+      CloudSyncFailureState.record(this.backupFailureStageOfPhase(phase), CloudBackupFailureReason.WRITE_FAILED);
+      const failed = cloudBackupFailure(CloudBackupFailureReason.WRITE_FAILED);
+      failed.partialFailure = published || preserveSource;
+      return failed;
+    } finally {
+      if (tempOwned && !preserveSource) {
+        if (staged !== undefined) cleanupFailed = !await staged.discard(tempPath, context);
+        else {
+          try { await this.fsPort.deleteFile(tempPath); } catch (_) {
+            CloudBackupDiagnostics.mark(context, DiagnosticStage.TEMP_CLEANUP, DiagnosticResult.FAIL,
+              { reason: DiagnosticReason.IO_ERROR });
           }
-        } catch (e) {
-          hilog.warn(DOMAIN, TAG, `cacheCloudOnlyBackups: skip ${fileName}: ${JSON.stringify(e)}`);
         }
       }
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `cacheCloudOnlyBackups: error=${JSON.stringify(e)}`);
+      if (!published && !preserveSource && staged !== undefined) await staged.recover(context);
     }
-  }
-
-  /** 检查是否需要自动备份：每日最多一次，需满足云同步开关 + 华为账号登录 */
-  async checkAndAutoBackup(): Promise<void> {
-    const enabled = AppPreference.getPreference(PREF_KEYS.APPEARANCE_HUAWEI_CLOUD_SYNC_ENABLE) as boolean;
-    if (!enabled) {
-      return;
+    // 发布后一致性校验（守护核心）：以发起备份时的快照（令牌数量 + 写入 header 的
+    // deviceId）对正式文件重读比对；不动摇既有的暂存回读，也不新增抢闸。
+    if (!await this.verifyPublishedBackup(fileName, snapshotCount, deviceId, context)) {
+      // Rejection proof is durable before unlink. Failure leaves the candidate isolated, never auto-deleted.
+      let cleanup = new PublicationCleanupResult();
+      cleanup.drained = false;
+      try {
+        await guard.reject(candidate, context);
+        cleanup = await this.cleanupPublications(context);
+        if (cleanup.syncStartAccepted && staged !== undefined) await staged.acknowledgeSync(context);
+      } catch (_) { this.publicationUnavailable = true; }
+      this.publicationPending = guard.hasRejectedCleanup();
+      CloudSyncFailureState.record(CloudSyncFailureStage.POST_PUBLISH_VERIFY, CloudBackupFailureReason.POST_VERIFY_FAILED);
+      const failed = cloudBackupFailure(CloudBackupFailureReason.POST_VERIFY_FAILED);
+      failed.syncStartAccepted = cleanup.syncStartAccepted;
+      failed.partialFailure = !cleanup.drained || cleanupFailed;
+      return failed;
     }
-
-    if (!this.accountPort.isUserLogin()) {
-      return;
-    }
-
-    const lastTime = AppPreference.getPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME) as string;
-    const lastTs = SyncTimeHelper.parseStoredTimestamp(lastTime);
-    if (lastTs > 0 && SyncTimeHelper.isToday(lastTs)) {
-      hilog.info(DOMAIN, TAG, 'checkAndAutoBackup: already backed up today, skipping');
-      return;
-    }
-
-    hilog.info(DOMAIN, TAG, 'checkAndAutoBackup: starting auto backup');
-    const success = await this.backupToCloud();
-    hilog.info(DOMAIN, TAG, `checkAndAutoBackup: result=${success}`);
-  }
-
-  /**
-   * 从指定备份记录恢复数据
-   *
-   * 若文件在云端（location=2）先缓存到本地，再读取、解密、解析、写入。
-   * @param recordId 备份文件名
-   */
-  async restoreFromBackupRecord(recordId: string): Promise<boolean> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      hilog.error(DOMAIN, TAG, 'restoreFromBackupRecord: not initialized');
-      return false;
-    }
-
-    if (!this.accountPort.isUserLogin()) {
-      hilog.warn(DOMAIN, TAG, 'restoreFromBackupRecord: Huawei account not logged in, aborting');
-      return false;
-    }
-
-    const encryptKey = this.accountPort.unionId();
-    const mode = this.crypto.getMode(true);
-
-    hilog.info(DOMAIN, TAG, `restoreFromBackupRecord: id=${recordId}`);
-
-    const filePath = `${this.cloudDir}/${recordId}`;
     try {
-      const stat = await this.fsPort.stat(filePath);
-      hilog.info(DOMAIN, TAG, `restoreFromBackupRecord: file size=${stat.size}, location=${stat.location}`);
-
-      if (stat.location === 2) {
-        hilog.info(DOMAIN, TAG, 'restoreFromBackupRecord: file is in cloud, caching');
-        await this.cacheFile(filePath);
-      }
-
-      const tokenContent = await this.fsPort.readTextFile(filePath);
-      hilog.info(DOMAIN, TAG, `restoreFromBackupRecord: read ${tokenContent.length} chars`);
-
-      const decrypted = await this.crypto.decrypt(tokenContent, mode, encryptKey);
-      hilog.info(DOMAIN, TAG, `restoreFromBackupRecord: decrypted size=${decrypted.length}`);
-
-      // 兼容新旧格式：新格式为 CloudBackupPayload（含 tokens 数组），旧格式为 TokenConfig[] 数组
-      let tokens: TokenConfig[] = [];
-      let enabledPacks: string[] = [];
-      const payload = JSON.parse(decrypted) as CloudBackupPayload;
-      if (payload && payload.tokens !== undefined && payload.tokens !== null) {
-        tokens = payload.tokens;
-        await this.groupPort.merge(payload.groups);
-        if (payload.enabledPacks !== undefined && payload.enabledPacks !== null) {
-          enabledPacks = payload.enabledPacks;
-        }
-      } else {
-        const oldTokens = JSON.parse(decrypted) as TokenConfig[];
-        tokens = oldTokens;
-      }
-
-      if (enabledPacks.length > 0) {
-        AppPreference.saveEnabledPacks(enabledPacks);
-        hilog.info(DOMAIN, TAG, `restoreFromBackupRecord: restored enabledPacks`);
-      }
-
-      hilog.info(DOMAIN, TAG, `restoreFromBackupRecord: token count=${tokens.length}`);
-
-      for (const token of tokens) {
-        await this.tokenPort.updateToken(token);
-      }
-
-      hilog.info(DOMAIN, TAG, 'restoreFromBackupRecord: completed successfully');
-      return true;
-    } catch (e) {
-      if (e instanceof CloudBackupTokenError) {
-        hilog.error(DOMAIN, TAG, `restoreFromBackupRecord: token error: ${e.message}`);
-      } else {
-        hilog.error(DOMAIN, TAG, `restoreFromBackupRecord: error=${JSON.stringify(e)}`);
-      }
-      return false;
+      // Postverify success alone is insufficient: durable release must also succeed.
+      await guard.verified(candidate, context);
+      this.publicationPending = guard.hasRejectedCleanup();
+    } catch (_) {
+      this.publicationUnavailable = true;
+      CloudSyncFailureState.record(CloudSyncFailureStage.PUBLISH, CloudBackupFailureReason.WRITE_FAILED);
+      const failed = cloudBackupFailure(CloudBackupFailureReason.WRITE_FAILED);
+      failed.partialFailure = true;
+      return failed;
     }
-  }
-
-  /** 删除单条备份记录并触发 FileSync 同步 */
-  async deleteBackupRecord(recordId: string): Promise<boolean> {
-    await this.init();
-    if (!this.context || !this.cloudDir) {
-      hilog.error(DOMAIN, TAG, 'deleteBackupRecord: not initialized');
-      return false;
+    const result = new CloudBackupActionResult();
+    result.localComplete = true;
+    if (cleanupFailed) {
+      result.partialFailure = true;
+      result.reason = CloudBackupFailureReason.DELETE_FAILED;
     }
-
-    hilog.info(DOMAIN, TAG, `deleteBackupRecord: id=${recordId}`);
-    const result = await this.deleteBackupFile(recordId);
-    if (result) {
-      await this.syncToCloud();
+    const scan = await this.listBackupRecords(context, owner);
+    if (scan.blocked) {
+      result.reason = CloudBackupFailureReason.CLEANUP_PENDING;
+      result.partialFailure = true;
+      CloudSyncFailureState.record(CloudSyncFailureStage.ROTATE, CloudBackupFailureReason.CLEANUP_PENDING);
+      return result;
+    }
+    // 轮换剪除仅统计归属本机且 header 通过的记录；无归属/他机记录不入选也不被剪除。
+    const owned = scan.records.filter((record: CloudBackupRecord): boolean =>
+      record.metadataStatus === CloudBackupMetadataStatus.VALID && record.tokenCountKnown === true && record.deviceId === deviceId);
+    if (owned.length > MAX_BACKUP_COUNT) {
+      const prune = await this.deleteBackupFile(owned[owned.length - 1].id, context);
+      if (!prune.success) { result.partialFailure = true; result.reason = prune.reason; }
+    }
+    try {
+      if (!await this.iconPort.backupIconPacks(owner, true, context)) {
+        result.partialFailure = true;
+        result.reason = CloudBackupFailureReason.ICON_FAILED;
+      }
+    } catch (_) {
+      result.partialFailure = true;
+      result.reason = CloudBackupFailureReason.ICON_FAILED;
+    }
+    result.syncStartAccepted = await this.syncToCloud(context);
+    if (result.syncStartAccepted && staged !== undefined) await staged.acknowledgeSync(context);
+    if (!result.syncStartAccepted) result.reason = CloudBackupFailureReason.SYNC_FAILED;
+    result.success = !result.partialFailure && result.syncStartAccepted;
+    if (result.success) {
+      AppPreference.setPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME, `${now}`);
+      CloudSyncFailureState.clear();
+    } else {
+      CloudSyncFailureState.record(this.backupFailureStageOfReason(result.reason), result.reason);
     }
     return result;
   }
 
   /**
-   * 删除指定备份文件（不同步）。
-   * 云端仅存文件（location=2）本地只有元数据桩，直接按本地路径删除必失败，
-   * 须先缓存（下载）到本地再删除，删除结果由后续 FileSync 同步到云端。
+   * 发布后快速一致性校验：重读正式文件并只解析 header 的令牌数量与设备标识，
+   * 与发起备份时的快照比对。不解密正文、不展开令牌列表。
+   * 重读抛错、文件缺失、header 非法三种情况都收敛为校验失败，不向用户抛未处理异常。
    */
-  private async deleteBackupFile(fileName: string): Promise<boolean> {
-    const filePath = `${this.cloudDir}/${fileName}`;
+  private async verifyPublishedBackup(fileName: string, expectedCount: number, expectedDeviceId: string,
+    context: DiagnosticContext): Promise<boolean> {
     try {
-      const stat = await this.fsPort.stat(filePath);
-      if (stat.location === 2) {
-        hilog.info(DOMAIN, TAG, `deleteBackupFile: cloud-only, caching ${fileName} first`);
-        await this.cacheFile(filePath);
+      const content = await this.fsPort.readTextFile(`${this.cloudDir}/${fileName}`, context);
+      const header = this.crypto.parseTokenHeader(content, context);
+      if (header.tokenCount !== expectedCount ||
+        normalizeCloudBackupDeviceId(header.deviceId) !== expectedDeviceId) {
+        // 只记比对结论，不输出数量、文件名或路径。
+        CloudBackupDiagnostics.mark(context, DiagnosticStage.POST_PUBLISH_VERIFY, DiagnosticResult.FAIL,
+          { reason: DiagnosticReason.MISMATCH, headerParsed: true });
+        return false;
       }
-    } catch (e) {
-      // stat/缓存失败不阻断删除尝试，由删除本身给出最终结果
-      hilog.warn(DOMAIN, TAG, `deleteBackupFile: stat/cache failed for ${fileName}: ${JSON.stringify(e)}`);
-    }
-    try {
-      await this.fsPort.deleteFile(filePath);
-      hilog.info(DOMAIN, TAG, `deleteBackupFile: deleted ${fileName}`);
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.POST_PUBLISH_VERIFY, DiagnosticResult.OK,
+        { headerParsed: true });
       return true;
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `deleteBackupFile: error=${JSON.stringify(e)}`);
+    } catch (error) {
+      // code 1/2 为可信格式/完整性失败；code 3（Base64/JSON 解码不可用）归解密类，其余读取异常归 IO。
+      const tokenError = error instanceof CloudBackupTokenError ? error.code : 0;
+      const invalid = tokenError === 1 || tokenError === 2;
+      const undecodable = tokenError === 3;
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.POST_PUBLISH_VERIFY, DiagnosticResult.FAIL,
+        { reason: invalid ? DiagnosticReason.INVALID_FORMAT :
+          undecodable ? DiagnosticReason.DECRYPT_FAILED : DiagnosticReason.IO_ERROR });
       return false;
     }
   }
 
-  /** 扫描云端目录，解析备份文件头部元信息，返回按时间戳降序排列的记录列表 */
-  private async listBackupRecords(): Promise<CloudBackupRecord[]> {
-    const records: CloudBackupRecord[] = [];
-    try {
-      const files = await this.fsPort.listFiles(this.cloudDir);
+  async restoreFromCloud(): Promise<boolean> {
+    const result = await this.runAction(CloudBackupOperationKind.RESTORE, DiagnosticKind.RESTORE,
+      DiagnosticStage.RESTORE_END,
+      async (owner: CloudBackupOperationLease, context: DiagnosticContext): Promise<CloudBackupActionResult> => {
+        const scan = await this.listBackupRecords(context, owner);
+        if (scan.blocked) return cloudBackupFailure(CloudBackupFailureReason.CLEANUP_PENDING);
+        const restorable = scan.records.filter((record: CloudBackupRecord): boolean =>
+          record.metadataStatus === CloudBackupMetadataStatus.VALID);
+        if (restorable.length === 0) return cloudBackupFailure(CloudBackupFailureReason.READ_FAILED);
+        return this.restoreRecord(restorable[0].id, context, owner);
+      });
+    return result.success;
+  }
 
-      for (const fileName of files) {
-        if (!isBackupFileName(fileName)) {
+  async restoreFromBackupRecord(id: string): Promise<boolean> {
+    return (await this.restoreFromBackupRecordResult(id)).success;
+  }
+
+  async restoreFromBackupRecordResult(id: string): Promise<CloudBackupActionResult> {
+    return this.runAction(CloudBackupOperationKind.RESTORE, DiagnosticKind.RESTORE, DiagnosticStage.RESTORE_END,
+      async (owner: CloudBackupOperationLease, context: DiagnosticContext): Promise<CloudBackupActionResult> => {
+        return this.restoreRecord(id, context, owner);
+      });
+  }
+
+  private async restoreRecord(id: string, context: DiagnosticContext,
+    owner: CloudBackupOperationLease): Promise<CloudBackupActionResult> {
+    if (!isSafeCloudBackupId(id)) return cloudBackupFailure(CloudBackupFailureReason.INVALID_TARGET);
+    const guard = await this.publication();
+    if (!guard.isAvailable()) return cloudBackupFailure(CloudBackupFailureReason.CLEANUP_PENDING);
+    if (guard.isolatedFileNames().includes(id)) {
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.PUBLICATION_GUARD, DiagnosticResult.BLOCKED,
+        { reason: DiagnosticReason.MISMATCH });
+      return cloudBackupFailure(CloudBackupFailureReason.POST_VERIFY_FAILED);
+    }
+    let content: string;
+    try {
+      const path = `${this.cloudDir}/${id}`;
+      const stat = await this.fsPort.stat(path);
+      if (!await this.prepareRead(path, stat.location, context)) {
+        owner.retainUnknownIo();
+        return cloudBackupFailure(CloudBackupFailureReason.CLEANUP_PENDING);
+      }
+      content = await this.fsPort.readTextFile(path, context);
+    } catch (error) {
+      this.logFileError(context, DiagnosticStage.READ_END, error);
+      return cloudBackupFailure(CloudBackupFailureReason.READ_FAILED);
+    }
+    let decrypted: string;
+    try {
+      decrypted = await this.crypto.decrypt(content, this.crypto.getMode(true), this.accountPort.unionId(), context);
+    } catch (error) {
+      // 只有可信的格式/完整性错误可判坏；不能按原生 code、名称或 message 猜测密钥原因。
+      const invalid = error instanceof CloudBackupTokenError && (error.code === 1 || error.code === 2);
+      return cloudBackupFailure(invalid ? CloudBackupFailureReason.FORMAT_INVALID : CloudBackupFailureReason.DECRYPT_FAILED);
+    }
+    let payload: CloudBackupRestorePayload;
+    try {
+      payload = this.parseRestorePayload(decrypted);
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.RESTORE_VALIDATE, DiagnosticResult.OK);
+    } catch (_) {
+      // CBC 的有效填充及非密钥摘要不能证明密钥正确；只有明文 mock 可确认为载荷格式错误。
+      const invalid = this.crypto.isMockFormat(content);
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.RESTORE_VALIDATE, DiagnosticResult.FAIL,
+        { reason: invalid ? DiagnosticReason.INVALID_FORMAT : DiagnosticReason.DECRYPT_FAILED });
+      return cloudBackupFailure(invalid ? CloudBackupFailureReason.FORMAT_INVALID : CloudBackupFailureReason.DECRYPT_FAILED);
+    }
+    try {
+      if (payload.groups !== undefined) await this.groupPort.merge(payload.groups);
+      if (payload.enabledPacks.length > 0) AppPreference.saveEnabledPacks(payload.enabledPacks);
+      for (const token of payload.tokens) await this.tokenPort.updateToken(token);
+      const result = new CloudBackupActionResult();
+      result.success = true;
+      result.localComplete = true;
+      return result;
+    } catch (_) {
+      const result = cloudBackupFailure(CloudBackupFailureReason.WRITE_FAILED);
+      result.partialFailure = true;
+      return result;
+    }
+  }
+
+  /** 在任何本地持久化之前完整校验；旧数组没有 groups，不能额外触发分组合并。 */
+  private parseRestorePayload(decrypted: string): CloudBackupRestorePayload {
+    let tokens: TokenConfig[];
+    let groups: TokenGroup[] | undefined = undefined;
+    let enabledPacks: string[] = [];
+    const parsed = JSON.parse(decrypted) as CloudBackupPayload;
+    if (Array.isArray(parsed)) {
+      tokens = parsed as TokenConfig[];
+    } else {
+      if (!parsed || !Array.isArray(parsed.tokens) ||
+        (parsed.groups !== undefined && !Array.isArray(parsed.groups)) ||
+        (parsed.enabledPacks !== undefined && !Array.isArray(parsed.enabledPacks))) {
+        throw new Error('BACKUP_PAYLOAD_INVALID');
+      }
+      tokens = parsed.tokens;
+      groups = parsed.groups;
+      enabledPacks = parsed.enabledPacks ?? [];
+    }
+    const ids = new Set<string>();
+    for (const token of tokens) {
+      // NFC(type=4) 本就不允许持久化，不能放宽或静默跳过使非法备份看似恢复成功。
+      if (!token || typeof token !== 'object' || Array.isArray(token) ||
+        typeof token.TokenUUID !== 'string' || token.TokenUUID.trim().length === 0 || ids.has(token.TokenUUID) ||
+        typeof token.TokenSecret !== 'string' || token.TokenSecret.length === 0 ||
+        !Number.isInteger(token.TokenType) || token.TokenType < 0 || token.TokenType > 3 ||
+        (token.TokenName !== undefined && typeof token.TokenName !== 'string') ||
+        (token.TokenIssuer !== undefined && typeof token.TokenIssuer !== 'string') ||
+        (token.TokenAlgorithm !== undefined && typeof token.TokenAlgorithm !== 'string') ||
+        (token.TokenGroupId !== undefined && typeof token.TokenGroupId !== 'string') ||
+        (token.TokenFavorite !== undefined && typeof token.TokenFavorite !== 'boolean') ||
+        (token.TokenPeriod !== undefined && (!Number.isFinite(token.TokenPeriod) || token.TokenPeriod <= 0)) ||
+        (token.TokenDigits !== undefined && (!Number.isInteger(token.TokenDigits) || token.TokenDigits <= 0)) ||
+        (token.TokenCounter !== undefined && (!Number.isSafeInteger(token.TokenCounter) || token.TokenCounter < 0)) ||
+        (token.RankScore !== undefined && !Number.isFinite(token.RankScore))) {
+        throw new Error('BACKUP_PAYLOAD_INVALID');
+      }
+      ids.add(token.TokenUUID);
+    }
+    const groupIds = new Set<string>();
+    if (groups !== undefined) {
+      for (const group of groups) {
+        if (!group || typeof group !== 'object' || Array.isArray(group) || typeof group.id !== 'string' ||
+          group.id.trim().length === 0 || groupIds.has(group.id) || typeof group.name !== 'string' ||
+          group.name.trim().length === 0) throw new Error('BACKUP_PAYLOAD_INVALID');
+        groupIds.add(group.id);
+      }
+    }
+    if (enabledPacks.some((pack: string): boolean => typeof pack !== 'string' || pack.length === 0)) {
+      throw new Error('BACKUP_PAYLOAD_INVALID');
+    }
+    return { tokens: tokens, groups: groups, enabledPacks: enabledPacks };
+  }
+
+  async clearCloudStorage(): Promise<boolean> { return (await this.clearCloudStorageResult()).success; }
+  async clearDeviceCloudStorage(): Promise<boolean> { return (await this.clearDeviceCloudStorageResult()).success; }
+  async clearDeviceNameCloudStorage(): Promise<boolean> { return (await this.clearDeviceNameCloudStorageResult()).success; }
+  clearCloudStorageResult(): Promise<CloudBackupActionResult> { return this.clearResult(DiagnosticScope.ALL); }
+  clearDeviceCloudStorageResult(): Promise<CloudBackupActionResult> { return this.clearResult(DiagnosticScope.DEVICE); }
+  clearDeviceNameCloudStorageResult(): Promise<CloudBackupActionResult> { return this.clearResult(DiagnosticScope.SAME_NAME); }
+
+  private clearResult(scope: DiagnosticScope): Promise<CloudBackupActionResult> {
+    return this.runAction(CloudBackupOperationKind.CLEAR, DiagnosticKind.CLEAR, DiagnosticStage.CLEAR_END,
+      async (owner: CloudBackupOperationLease, context: DiagnosticContext): Promise<CloudBackupActionResult> => {
+        CloudBackupDiagnostics.mark(context, DiagnosticStage.CLEAR_BEGIN, DiagnosticResult.BEGIN, { scope: scope });
+        const result = new CloudBackupActionResult();
+        let targets: string[] = [];
+        let devices: string[] = [];
+        try {
+          if (scope === DiagnosticScope.ALL) {
+            targets = (await this.fsPort.listFiles(this.cloudDir)).filter(isSafeCloudBackupId);
+          } else {
+            const id = normalizeCloudBackupDeviceId(this.devicePort.deviceId());
+            const name = this.devicePort.deviceName().trim();
+            if (!id || (scope === DiagnosticScope.SAME_NAME && !name)) {
+              return cloudBackupFailure(CloudBackupFailureReason.IDENTITY_UNAVAILABLE);
+            }
+            const scan = await this.listBackupRecords(context, owner);
+            if (scan.blocked) return cloudBackupFailure(CloudBackupFailureReason.CLEANUP_PENDING);
+            if (!scan.complete) return cloudBackupFailure(CloudBackupFailureReason.READ_FAILED);
+            // 无归属（deviceId 缺失）或同名范围无法确认的记录：跳过并计数上报，
+            // 不再阻断设备级清理，也绝不自动认领（归错设备的删除不可逆）。
+            for (const record of scan.records) {
+              if (!record.deviceId || (scope === DiagnosticScope.SAME_NAME && !record.deviceName)) {
+                result.skippedUnowned++;
+                continue;
+              }
+              const matched = scope === DiagnosticScope.DEVICE ? record.deviceId === id :
+                record.deviceId !== id && record.deviceName === name;
+              if (matched) {
+                targets.push(record.id);
+                devices.push(record.deviceId);
+              }
+            }
+            if (scope === DiagnosticScope.DEVICE && !devices.includes(id)) devices.push(id);
+          }
+        } catch (error) {
+          this.logFileError(context, DiagnosticStage.READ_END, error);
+          return cloudBackupFailure(CloudBackupFailureReason.READ_FAILED);
+        }
+        let iconsOk = true;
+        // 设备范围须先保留归属证据，图标无法确认清理时不能先删除这些令牌文件。
+        if (scope !== DiagnosticScope.ALL && devices.length > 0) {
+          iconsOk = await this.clearIcons(owner, context, devices);
+          if (!iconsOk) {
+            result.reason = CloudBackupFailureReason.ICON_FAILED;
+            result.partialFailure = true;
+            result.syncStartAccepted = await this.syncToCloud(context);
+            return result;
+          }
+        }
+        let deletedAny = false;
+        const deletedTargets: string[] = [];
+        for (const target of targets) {
+          const deletion = await this.deleteBackupFile(target, context);
+          if (deletion.success) {
+            deletedAny = true;
+            deletedTargets.push(target);
+            result.deletedCount++;
+          } else { result.reason = deletion.reason; result.partialFailure = true; }
+        }
+        if (scope === DiagnosticScope.ALL) {
+          iconsOk = await this.clearIcons(owner, context);
+          if (!iconsOk) { result.partialFailure = true; result.reason = CloudBackupFailureReason.ICON_FAILED; }
+        }
+        result.localComplete = !result.partialFailure && iconsOk;
+        result.syncStartAccepted = await this.syncToCloud(context);
+        if (result.syncStartAccepted) {
+          try {
+            const guard = await this.publication();
+            for (const target of deletedTargets) await guard.acknowledgeExplicitDeletion(target, context);
+            this.publicationPending = guard.hasRejectedCleanup();
+          } catch (_) {
+            this.publicationUnavailable = true;
+            result.partialFailure = true;
+            result.reason = CloudBackupFailureReason.CLEANUP_PENDING;
+          }
+        }
+        if (!result.syncStartAccepted && result.reason === CloudBackupFailureReason.NONE) {
+          result.reason = CloudBackupFailureReason.SYNC_FAILED;
+        }
+        result.success = result.localComplete && result.syncStartAccepted && !result.partialFailure;
+        if (result.success && scope !== DiagnosticScope.SAME_NAME) {
+          AppPreference.setPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME, '0');
+        }
+        if (!result.success && deletedAny) result.partialFailure = true;
+        return result;
+      });
+  }
+
+  private async clearIcons(owner: CloudBackupOperationLease, context: DiagnosticContext, ids?: string[]): Promise<boolean> {
+    try {
+      const icons = this.iconPort;
+      if (ids !== undefined && icons.clearCloudBackupForDevices !== undefined) {
+        return await icons.clearCloudBackupForDevices(ids, owner, true, context);
+      }
+      return await icons.clearCloudBackup(owner, true, context);
+    } catch (_) {
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.ICON_CLEAR, DiagnosticResult.FAIL);
+      return false;
+    }
+  }
+
+  async deleteBackupRecord(id: string): Promise<boolean> { return (await this.deleteBackupRecordResult(id)).success; }
+
+  deleteBackupRecordResult(id: string): Promise<CloudBackupActionResult> {
+    return this.runAction(CloudBackupOperationKind.CLEAR, DiagnosticKind.DELETE, DiagnosticStage.DELETE_END,
+      async (_owner: CloudBackupOperationLease, context: DiagnosticContext): Promise<CloudBackupActionResult> => {
+        const result = await this.deleteBackupFile(id, context);
+        if (!result.success) return result;
+        result.syncStartAccepted = await this.syncToCloud(context);
+        result.success = result.syncStartAccepted;
+        if (!result.success) result.reason = CloudBackupFailureReason.SYNC_FAILED;
+        else {
+          try {
+            const guard = await this.publication();
+            await guard.acknowledgeExplicitDeletion(id, context);
+            this.publicationPending = guard.hasRejectedCleanup();
+          } catch (_) {
+            this.publicationUnavailable = true;
+            result.success = false;
+            result.partialFailure = true;
+            result.reason = CloudBackupFailureReason.CLEANUP_PENDING;
+          }
+        }
+        return result;
+      });
+  }
+
+  private async deleteBackupFile(id: string, context: DiagnosticContext): Promise<CloudBackupActionResult> {
+    if (!isSafeCloudBackupId(id)) return cloudBackupFailure(CloudBackupFailureReason.INVALID_TARGET);
+    const path = `${this.cloudDir}/${id}`;
+    try {
+      const cache = this.cacher;
+      if (cache?.prepareForDelete !== undefined && !await cache.prepareForDelete(path, context)) {
+        CloudBackupDiagnostics.mark(context, DiagnosticStage.DELETE_GUARD, DiagnosticResult.BLOCKED,
+          { reason: DiagnosticReason.INFLIGHT_UNCONFIRMED, unlinkAttempted: false });
+        return cloudBackupFailure(CloudBackupFailureReason.CLEANUP_PENDING);
+      }
+      try {
+        await this.fsPort.stat(path);
+      } catch (error) {
+        if (!isFileAbsent(error)) throw error as Error;
+        const absent = new CloudBackupActionResult();
+        absent.success = true;
+        absent.localComplete = true;
+        CloudBackupDiagnostics.mark(context, DiagnosticStage.UNLINK_END, DiagnosticResult.OK,
+          { alreadyAbsent: true, unlinkAttempted: false });
+        return absent;
+      }
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.UNLINK_BEGIN, DiagnosticResult.BEGIN, { unlinkAttempted: true });
+      try { await this.fsPort.deleteFile(path); } catch (error) { if (!isFileAbsent(error)) throw error as Error; }
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.UNLINK_END, DiagnosticResult.OK, { unlinkAttempted: true });
+      const result = new CloudBackupActionResult();
+      result.success = true;
+      result.localComplete = true;
+      return result;
+    } catch (error) {
+      this.logFileError(context, DiagnosticStage.UNLINK_END, error);
+      return cloudBackupFailure(CloudBackupFailureReason.DELETE_FAILED);
+    }
+  }
+
+  async listBackupHistory(): Promise<CloudBackupRecord[]> { return (await this.listBackupHistoryResult()).records; }
+
+  async listBackupHistoryResult(): Promise<CloudBackupHistoryResult> {
+    const result = new CloudBackupHistoryResult();
+    const context = CloudBackupDiagnostics.begin(DiagnosticKind.HISTORY);
+    const owner = CloudBackupOperationGate.getInstance().tryEnter(CloudBackupOperationKind.HISTORY);
+    if (owner === undefined) {
+      result.reason = this.blockedReason();
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.HISTORY_END, DiagnosticResult.BLOCKED,
+        { reason: this.diagnosticReason(result.reason) });
+      CloudBackupDiagnostics.end(context);
+      return result;
+    }
+    try {
+      result.reason = await this.ready();
+      if (result.reason !== CloudBackupFailureReason.NONE) {
+        CloudBackupDiagnostics.mark(context, DiagnosticStage.HISTORY_END, DiagnosticResult.BLOCKED,
+          { reason: this.diagnosticReason(result.reason) });
+        return result;
+      }
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.HISTORY_BEGIN, DiagnosticResult.BEGIN);
+      if (!await this.preparePublication(context)) {
+        if (this.cacher?.isCleanupPending?.()) owner.retainUnknownIo();
+        result.reason = CloudBackupFailureReason.CLEANUP_PENDING;
+        return result;
+      }
+      // Startup/history retries only durable confirmed-and-rejected publication ownership.
+      await this.cleanupPublications(context);
+      if (!(await this.publication()).isAvailable()) {
+        result.reason = CloudBackupFailureReason.CLEANUP_PENDING;
+        return result;
+      }
+      if (this.cacher?.isCleanupPending?.()) {
+        owner.retainUnknownIo();
+        result.reason = CloudBackupFailureReason.CLEANUP_PENDING;
+        return result;
+      }
+      // Guard source inspection must finish before staging recovery removes any source evidence.
+      // 当前许可排除本进程写入；仅恢复本安装登记产物，失败不隐藏仍可读的正式历史。
+      if (!this.cacher?.isCleanupPending?.()) {
+        try { await (await this.staging())?.recover(context); } catch (_) {
+          CloudBackupDiagnostics.mark(context, DiagnosticStage.TEMP_CLEANUP, DiagnosticResult.FAIL,
+            { reason: DiagnosticReason.UNAVAILABLE });
+        }
+      }
+      if (this.testDeps !== null && this.testDeps.historyTask === undefined) {
+        const scan = await this.listBackupRecords(context, owner);
+        result.records = scan.records;
+        result.success = scan.complete;
+      } else {
+        if (!await this.precache(context)) {
+          owner.retainUnknownIo();
+          result.reason = CloudBackupFailureReason.CLEANUP_PENDING;
+          CloudBackupDiagnostics.mark(context, DiagnosticStage.HISTORY_END, DiagnosticResult.BLOCKED,
+            { reason: DiagnosticReason.INFLIGHT_UNCONFIRMED });
+          return result;
+        }
+        const task = this.testDeps?.historyTask !== undefined ? await this.testDeps.historyTask(this.cloudDir, context) :
+          await taskpool.execute(loadBackupHistoryRecords, this.cloudDir, false, context) as CloudBackupTaskHistory;
+        result.records = task.records;
+        result.success = task.complete;
+        CloudBackupDiagnostics.replay(context, task.diagnostics);
+      }
+      applyCloudPublicationIsolation(result.records, (await this.publication()).isolatedFileNames());
+      if (!result.success) result.reason = CloudBackupFailureReason.READ_FAILED;
+      if (owner.isCleanupPending() || this.cacher?.isCleanupPending?.()) {
+        result.success = false;
+        result.reason = CloudBackupFailureReason.CLEANUP_PENDING;
+      }
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.HISTORY_END, result.success ? DiagnosticResult.OK : DiagnosticResult.FAIL,
+        { reason: this.diagnosticReason(result.reason) });
+      return result;
+    } catch (error) {
+      this.logFileError(context, DiagnosticStage.HISTORY_END, error);
+      result.reason = CloudBackupFailureReason.READ_FAILED;
+      return result;
+    } finally {
+      this.finishLease(owner);
+      CloudBackupDiagnostics.end(context);
+    }
+  }
+
+  async cacheCloudOnlyBackups(): Promise<void> {
+    await this.runAction(CloudBackupOperationKind.HISTORY, DiagnosticKind.HISTORY, DiagnosticStage.HISTORY_END,
+      async (owner: CloudBackupOperationLease, context: DiagnosticContext): Promise<CloudBackupActionResult> => {
+        if (!await this.precache(context)) {
+          owner.retainUnknownIo();
+          return cloudBackupFailure(CloudBackupFailureReason.CLEANUP_PENDING);
+        }
+        const result = new CloudBackupActionResult();
+        result.success = true;
+        return result;
+      });
+  }
+
+  private async precache(context: DiagnosticContext): Promise<boolean> {
+    const isolated = (await this.publication()).isolatedFileNames();
+    const files = await this.fsPort.listFiles(this.cloudDir);
+    for (const name of files) {
+      if (!isSafeCloudBackupId(name) || isolated.includes(name)) continue;
+      try {
+        const path = `${this.cloudDir}/${name}`;
+        const stat = await this.fsPort.stat(path);
+        if (!await this.prepareRead(path, stat.location, context)) return false;
+      } catch (error) {
+        // 单次 stat 错误不构成持久黑名单；后台重新枚举并按实际读取结果展示。
+        this.logFileError(context, DiagnosticStage.READ_END, error);
+      }
+    }
+    return this.cacher?.isCleanupPending?.() !== true;
+  }
+
+  private async listBackupRecords(context: DiagnosticContext, owner: CloudBackupOperationLease): Promise<BackupScanResult> {
+    const result = new BackupScanResult();
+    const guard = await this.publication();
+    if (!guard.isAvailable()) { result.blocked = true; result.complete = false; return result; }
+    const isolated = guard.isolatedFileNames();
+    let files: string[];
+    try { files = await this.fsPort.listFiles(this.cloudDir); } catch (error) {
+      this.logFileError(context, DiagnosticStage.READ_END, error);
+      result.complete = false;
+      return result;
+    }
+    for (const name of files) {
+      if (!isSafeCloudBackupId(name)) continue;
+      const path = `${this.cloudDir}/${name}`;
+      try {
+        const stat = await this.fsPort.stat(path);
+        const timestamp = parseBackupTimestamp(name);
+        const record: CloudBackupRecord = {
+          id: name, date: SyncTimeHelper.formatTimestamp(timestamp), timestamp: timestamp,
+          tokenCount: 0, size: stat.size, encrypted: true, deviceId: '', deviceName: '', location: stat.location,
+          metadataStatus: stat.location === 2 ? CloudBackupMetadataStatus.PENDING : CloudBackupMetadataStatus.READ_FAILED,
+          identityStatus: CloudBackupIdentityStatus.ID_MISSING, tokenCountKnown: false,
+        };
+        if (isolated.includes(name)) {
+          applyCloudPublicationIsolation([record], isolated);
+          result.records.push(record);
           continue;
         }
-
-        const filePath = `${this.cloudDir}/${fileName}`;
-        try {
-          const stat = await this.fsPort.stat(filePath);
-          const timestamp = parseBackupTimestamp(fileName);
-
-          if (isNaN(timestamp)) {
-            continue;
-          }
-
-          let tokenCount = 0;
-          let fileSize = stat.size;
-          let deviceId = '';
-          let deviceName = '';
-          try {
-            // 云端仅存文件（location=2）本地只有元数据，须先缓存到本地才能读取 header
-            if (stat.location === 2) {
-              await this.cacheFile(filePath);
-            }
-            const tokenContent = await this.fsPort.readTextFile(filePath);
-            const header = this.crypto.parseTokenHeader(tokenContent);
-            tokenCount = header.tokenCount;
-            fileSize = header.size;
-            deviceId = header.deviceId;
-            deviceName = header.deviceName;
-          } catch (e) {
-            hilog.warn(DOMAIN, TAG, `listBackupRecords: parse header failed for ${fileName}, using file stat`);
-          }
-
-          // 与 SyncTimeHelper.formatTimestamp 同一格式，避免两处各写一遍补零逻辑
-          const dateStr = SyncTimeHelper.formatTimestamp(timestamp);
-
-          records.push({
-            id: fileName,
-            date: dateStr,
-            timestamp: timestamp,
-            tokenCount: tokenCount,
-            size: fileSize,
-            encrypted: true,
-            deviceId: deviceId,
-            deviceName: deviceName,
-            location: stat.location,
-          });
-        } catch (e) {
-          hilog.error(DOMAIN, TAG, `listBackupRecords: stat error for ${fileName}=${JSON.stringify(e)}`);
+        let content: string | undefined = undefined;
+        if (!await this.prepareRead(path, stat.location, context)) {
+          owner.retainUnknownIo();
+          result.blocked = true;
+          result.complete = false;
+          result.records.push(record);
+          break;
         }
+        try {
+          content = await this.fsPort.readTextFile(path, context);
+        } catch (error) {
+          record.metadataStatus = CloudBackupMetadataStatus.READ_FAILED;
+          this.logFileError(context, DiagnosticStage.READ_END, error);
+        }
+        if (content !== undefined) {
+          try {
+            const header = this.crypto.parseTokenHeader(content);
+            record.tokenCount = header.tokenCount;
+            record.size = header.size;
+            record.deviceId = normalizeCloudBackupDeviceId(header.deviceId);
+            record.deviceName = header.deviceName.trim();
+            record.metadataStatus = CloudBackupMetadataStatus.VALID;
+            record.identityStatus = !record.deviceId ? CloudBackupIdentityStatus.ID_MISSING :
+              !record.deviceName ? CloudBackupIdentityStatus.NAME_MISSING : CloudBackupIdentityStatus.COMPLETE;
+            record.tokenCountKnown = true;
+          } catch (error) {
+            const invalid = error instanceof CloudBackupTokenError && error.code === 1;
+            record.metadataStatus = !invalid ? CloudBackupMetadataStatus.READ_FAILED : stat.location === 2 ? CloudBackupMetadataStatus.PENDING :
+              stat.location === 1 || stat.location === 3 ? CloudBackupMetadataStatus.INVALID : CloudBackupMetadataStatus.READ_FAILED;
+            CloudBackupDiagnostics.mark(context, DiagnosticStage.HEADER_PARSE, DiagnosticResult.FAIL,
+              { reason: invalid ? DiagnosticReason.INVALID_FORMAT : DiagnosticReason.DECRYPT_FAILED,
+                contentNonEmpty: content.length > 0, headerParsed: false });
+          }
+        }
+        result.records.push(record);
+      } catch (error) {
+        result.complete = false;
+        this.logFileError(context, DiagnosticStage.READ_END, error);
       }
-
-      records.sort((a, b) => b.timestamp - a.timestamp);
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `listBackupRecords: error=${JSON.stringify(e)}`);
     }
-
-    hilog.info(DOMAIN, TAG, `listBackupRecords: returning ${records.length} records`);
-    return records;
+    result.records.sort((left: CloudBackupRecord, right: CloudBackupRecord): number => right.timestamp - left.timestamp);
+    return result;
   }
 
-  /** 触发 FileSync 将本地变更同步到云端 */
-  private async syncToCloud(): Promise<void> {
-    if (this.testDeps?.sync !== undefined) {
-      try {
+  async hasBackupRecords(): Promise<boolean | undefined> {
+    const context = CloudBackupDiagnostics.begin(DiagnosticKind.HISTORY);
+    const owner = CloudBackupOperationGate.getInstance().tryEnter(CloudBackupOperationKind.HISTORY);
+    if (owner === undefined) {
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.HISTORY_END, DiagnosticResult.BLOCKED,
+        { reason: this.diagnosticReason(this.blockedReason()) });
+      CloudBackupDiagnostics.end(context);
+      return undefined;
+    }
+    try {
+      const readiness = await this.ready();
+      if (readiness !== CloudBackupFailureReason.NONE) {
+        CloudBackupDiagnostics.mark(context, DiagnosticStage.HISTORY_END, DiagnosticResult.BLOCKED,
+          { reason: this.diagnosticReason(readiness) });
+        return undefined;
+      }
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.HISTORY_BEGIN, DiagnosticResult.BEGIN);
+      if (!await this.preparePublication(context)) {
+        if (this.cacher?.isCleanupPending?.()) owner.retainUnknownIo();
+        return undefined;
+      }
+      const count = this.testDeps !== null ? ((await this.fsPort.listFiles(this.cloudDir)).some(isSafeCloudBackupId) ? 1 : 0)
+        : await taskpool.execute(checkCloudBackupRecords, this.cloudDir) as number;
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.HISTORY_END, count < 0 ? DiagnosticResult.FAIL : DiagnosticResult.OK,
+        { reason: count < 0 ? DiagnosticReason.IO_ERROR : DiagnosticReason.NONE });
+      return count < 0 ? undefined : count > 0;
+    } catch (error) {
+      this.logFileError(context, DiagnosticStage.HISTORY_END, error);
+      return undefined;
+    } finally {
+      this.finishLease(owner);
+      CloudBackupDiagnostics.end(context);
+    }
+  }
+
+  async retrySync(): Promise<boolean> {
+    const result = await this.runAction(CloudBackupOperationKind.HISTORY, DiagnosticKind.SYNC, DiagnosticStage.SYNC_START,
+      async (_owner: CloudBackupOperationLease, context: DiagnosticContext): Promise<CloudBackupActionResult> => {
+        const result = new CloudBackupActionResult();
+        const cleanup = await this.cleanupPublications(context);
+        if (!(await this.publication()).isAvailable()) return cloudBackupFailure(CloudBackupFailureReason.CLEANUP_PENDING);
+        result.syncStartAccepted = cleanup.syncAttempted ? cleanup.syncStartAccepted : await this.syncToCloud(context);
+        result.success = cleanup.drained && result.syncStartAccepted;
+        result.partialFailure = !cleanup.drained;
+        result.reason = !cleanup.drained ? CloudBackupFailureReason.CLEANUP_PENDING :
+          result.success ? CloudBackupFailureReason.NONE : CloudBackupFailureReason.SYNC_FAILED;
+        return result;
+      });
+    return result.success;
+  }
+
+  private async syncToCloud(context: DiagnosticContext): Promise<boolean> {
+    try {
+      let started: boolean;
+      if (this.testDeps?.sync !== undefined) {
         await this.testDeps.sync.start();
-        hilog.info(DOMAIN, TAG, 'syncToCloud: started');
-      } catch (e) {
-        hilog.error(DOMAIN, TAG, `syncToCloud: error=${JSON.stringify(e)}`);
+        started = true;
+      } else {
+        started = await CloudBackupSyncService.getInstance().start(context);
       }
-      return;
-    }
-    try {
-      if (!this.fileSync) {
-        this.fileSync = new cloudSync.FileSync();
-      }
-      await this.fileSync.start();
-      hilog.info(DOMAIN, TAG, 'syncToCloud: started');
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `syncToCloud: error=${JSON.stringify(e)}`);
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.SYNC_START, started ? DiagnosticResult.OK : DiagnosticResult.FAIL,
+        { syncStartAccepted: started });
+      return started;
+    } catch (_) {
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.SYNC_START, DiagnosticResult.FAIL,
+        { reason: DiagnosticReason.SYNC_REJECTED, syncStartAccepted: false });
+      return false;
     }
   }
 
-  /** 将云端文件缓存到本地（location=2 时文件仅存在云端，需先拉取） */
-  private async cacheFile(filePath: string): Promise<void> {
-    // 测试注入下假文件系统内容均在本地，跳过云端缓存拉取
-    if (this.testDeps !== null) {
-      return;
-    }
-    try {
-      const uri = fileUri.getUriFromPath(filePath);
-      const cache = new cloudSync.CloudFileCache();
-      await cache.start(uri);
-      hilog.info(DOMAIN, TAG, `cacheFile: cached ${filePath}`);
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, `cacheFile: error=${JSON.stringify(e)}`);
-    }
+  private prepareRead(path: string, location: number, context: DiagnosticContext): Promise<boolean> {
+    return prepareCloudFileRead(this.cacher, path, location, context);
   }
 
-  get maxBackupCount(): number {
-    return MAX_BACKUP_COUNT;
+  private logFileError(context: DiagnosticContext, stage: DiagnosticStage, error: Object): void {
+    let code: number | undefined = undefined;
+    try { code = (error as BusinessError).code; } catch (_) {}
+    CloudBackupDiagnostics.mark(context, stage, DiagnosticResult.FAIL,
+      { errorDomain: DiagnosticErrorDomain.FS, code: code, reason: DiagnosticReason.IO_ERROR });
   }
+
+  async checkAndAutoBackup(): Promise<void> {
+    if (!AppPreference.getPreference(PREF_KEYS.APPEARANCE_HUAWEI_CLOUD_SYNC_ENABLE) || !this.accountPort.isUserLogin()) return;
+    const last = SyncTimeHelper.parseStoredTimestamp(AppPreference.getPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME) as string);
+    if (last > 0 && SyncTimeHelper.isToday(last)) return;
+    await this.backupToCloudResult();
+  }
+
+  get maxBackupCount(): number { return MAX_BACKUP_COUNT; }
 }

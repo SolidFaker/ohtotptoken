@@ -5,7 +5,7 @@ import { runInNewContext } from 'node:vm';
 import { test } from 'node:test';
 
 function load(file) {
-  return readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/export /g, '');
+  return readFileSync(new URL(`../${file}`, import.meta.url), 'utf8').replace(/^import\s[\s\S]*?;\r?\n/gm, '').replace(/export /g, '');
 }
 const paramsSource = load('entry/src/main/ets/dialogs/TokenProgressDialog.ets').split('@ComponentV2')[0]
   .replace(/@ObservedV2\s*/g, '').replace(/@Trace /g, '');
@@ -28,7 +28,7 @@ function fixture({ failOpen = false, failClose = false } = {}) {
       value.builder();
       return 42;
     },
-    async closeCustomDialog(id) {
+    closeCustomDialog(id) {
       assert.equal(id, 42);
       events.push('close');
       if (failClose) throw new Error('context already gone');

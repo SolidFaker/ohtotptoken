@@ -187,6 +187,14 @@ export class MemoryNamedSecretStore implements NamedSecretStore {
   }
 }
 
+export class MemoryFsError extends Error {
+  code: number;
+  constructor(code: number) {
+    super('Synthetic filesystem failure');
+    this.code = code;
+  }
+}
+
 /** FsGateway 内存实现：文件内容 + 删除/写入记录 + location 覆盖。 */
 export class MemoryFs implements FsGateway {
   files: Map<string, string> = new Map();
@@ -195,7 +203,24 @@ export class MemoryFs implements FsGateway {
   deletedPaths: string[] = [];
   copiedPairs: string[] = [];
   failWrite: boolean = false;
+  failClose: boolean = false;
+  failPublish: boolean = false;
+  failNewWriteAfterCreate: boolean = false;
+  failReadFor: Set<string> = new Set();
+  readOverride: Map<string, string> = new Map();
+  newWriteCalls: string[] = [];
+  publishedPairs: string[] = [];
+  publishAttempts: string[] = [];
   locationOverride: Map<string, number> = new Map();
+  /** 对这些源路径注入 copyFile 失败（模拟图标目录收集/发布的 IO 故障）。 */
+  failCopyFor: Set<string> = new Set();
+  /** 仅注入移动修改目标之前的失败；不能证明 SDK 移动失败或真机进程中断时保旧。 */
+  failReplace: boolean = false;
+  replaceAttempts: string[] = [];
+  /** moveFileToReplace 成功替换记录（源->目标），供发布顺序断言。 */
+  replacedPairs: string[] = [];
+  /** 专用临时目录清理故障注入，默认不改变既有行为。 */
+  failRemoveDirFor: Set<string> = new Set();
 
   stat(path: string): Promise<FsStatInfo> {
     const info = new FsStatInfo();
@@ -208,7 +233,7 @@ export class MemoryFs implements FsGateway {
     }
     const content = this.files.get(path);
     if (content === undefined) {
-      return Promise.reject(new Error(`stat: no such file ${path}`));
+      return Promise.reject(new MemoryFsError(13900002));
     }
     info.size = content.length;
     info.isDirectory = false;
@@ -236,33 +261,104 @@ export class MemoryFs implements FsGateway {
   }
 
   readTextFile(path: string): Promise<string> {
+    if (this.failReadFor.has(path)) {
+      return Promise.reject(new MemoryFsError(13900005));
+    }
     const content = this.files.get(path);
     if (content === undefined) {
-      return Promise.reject(new Error(`read: no such file ${path}`));
+      return Promise.reject(new MemoryFsError(13900002));
     }
-    return Promise.resolve(content);
+    return Promise.resolve(this.readOverride.get(path) ?? content);
   }
 
   writeTextFile(path: string, content: string): Promise<void> {
+    this.files.set(path, '');
     if (this.failWrite) {
-      return Promise.reject(new Error('write failed'));
+      return Promise.reject(new MemoryFsError(13900005));
     }
     this.files.set(path, content);
     this.written.set(path, content);
+    if (this.failClose) {
+      return Promise.reject(new MemoryFsError(13900005));
+    }
     return Promise.resolve();
   }
 
   writeBinaryFile(path: string, data: Uint8Array): Promise<void> {
-    if (this.failWrite) {
-      return Promise.reject(new Error('write failed'));
-    }
     let text = '';
     for (let i = 0; i < data.length; i++) {
       text += String.fromCharCode(data[i]);
     }
-    this.files.set(path, text);
-    this.written.set(path, text);
-    return Promise.resolve();
+    return this.writeTextFile(path, text);
+  }
+
+  async writeNewTextFile(path: string, content: string): Promise<void> {
+    this.newWriteCalls.push(path);
+    if (this.files.has(path) || this.dirs.has(path)) {
+      throw new MemoryFsError(13900015);
+    }
+    // 生产实现先写独占 staging 目录。失败只能回收本操作 stage，目标无所有权。
+    const stage = `${path}.owned-stage-${this.newWriteCalls.length}`;
+    this.files.set(stage, '');
+    try {
+      if (this.failWrite || this.failNewWriteAfterCreate) {
+        throw new MemoryFsError(13900005);
+      }
+      this.files.set(stage, content);
+      if (this.failClose) {
+        throw new MemoryFsError(13900005);
+      }
+      this.files.set(path, content);
+      this.written.set(path, content);
+    } finally {
+      this.files.delete(stage);
+    }
+  }
+
+  syncedPaths: string[] = [];
+  failSyncFor: Set<string> = new Set();
+
+  async syncFile(path: string): Promise<void> {
+    if (!this.files.has(path)) throw new MemoryFsError(13900002);
+    if (this.failSyncFor.has(path)) throw new MemoryFsError(13900005);
+    this.syncedPaths.push(path);
+  }
+
+  async publishFile(source: string, destination: string): Promise<void> {
+    const pair = `${source}->${destination}`;
+    this.publishAttempts.push(pair);
+    if (source === destination || source.substring(0, source.lastIndexOf('/')) !==
+      destination.substring(0, destination.lastIndexOf('/'))) {
+      throw new MemoryFsError(13900020);
+    }
+    if (this.files.has(destination) || this.dirs.has(destination)) {
+      throw new MemoryFsError(13900015);
+    }
+    const content = this.files.get(source);
+    if (content === undefined) {
+      throw new MemoryFsError(13900002);
+    }
+    if (this.failPublish) {
+      throw new MemoryFsError(13900005);
+    }
+    this.files.set(destination, content);
+    this.files.delete(source);
+    const location = this.locationOverride.get(source);
+    if (location !== undefined) {
+      this.locationOverride.set(destination, location);
+      this.locationOverride.delete(source);
+    }
+    this.publishedPairs.push(pair);
+  }
+
+  private tempSequence: number = 0;
+
+  async makeTempDir(prefix: string): Promise<string> {
+    this.tempSequence++;
+    const path = prefix.replace('XXXXXX', ('000000' + this.tempSequence).slice(-6));
+    if (this.dirs.has(path) || this.files.has(path)) throw new MemoryFsError(13900015);
+    this.dirs.add(path);
+    return path;
   }
 
   makeDir(path: string): Promise<void> {
@@ -271,31 +367,20 @@ export class MemoryFs implements FsGateway {
   }
 
   removeDir(path: string): Promise<void> {
-    // 与 fs.rmdir 语义一致：仅能删除空目录
+    // fs.rmdir 递归删除；所有权保护必须由调用方负责，不能由 fake 的空目录假设代替。
+    if (this.failRemoveDirFor.has(path)) {
+      return Promise.reject(new MemoryFsError(13900005));
+    }
     if (!this.dirs.has(path)) {
-      return Promise.reject(new Error(`rmdir: no such directory ${path}`));
+      return Promise.reject(new MemoryFsError(13900002));
     }
-    let empty = true;
-    this.files.forEach((_: string, p: string) => {
-      const idx = p.lastIndexOf('/');
-      const parent = idx > 0 ? p.substring(0, idx) : '/';
-      if (parent === path) {
-        empty = false;
-      }
-    });
-    if (empty) {
-      this.dirs.forEach((d: string) => {
-        const idx = d.lastIndexOf('/');
-        const parent = idx > 0 ? d.substring(0, idx) : '/';
-        if (parent === path) {
-          empty = false;
-        }
-      });
+    const prefix = path + '/';
+    for (const file of this.files.keys()) {
+      if (file.startsWith(prefix)) this.files.delete(file);
     }
-    if (!empty) {
-      return Promise.reject(new Error(`rmdir: not empty ${path}`));
+    for (const directory of this.dirs) {
+      if (directory === path || directory.startsWith(prefix)) this.dirs.delete(directory);
     }
-    this.dirs.delete(path);
     return Promise.resolve();
   }
 
@@ -305,7 +390,7 @@ export class MemoryFs implements FsGateway {
       return Promise.reject(new Error(`delete: is a directory ${path}`));
     }
     if (!this.files.has(path)) {
-      return Promise.reject(new Error(`delete: no such file ${path}`));
+      return Promise.reject(new MemoryFsError(13900002));
     }
     this.deletedPaths.push(path);
     this.files.delete(path);
@@ -313,6 +398,9 @@ export class MemoryFs implements FsGateway {
   }
 
   copyFile(src: string, dest: string): Promise<void> {
+    if (this.failCopyFor.has(src)) {
+      return Promise.reject(new MemoryFsError(13900005));
+    }
     const content = this.files.get(src);
     if (content === undefined) {
       return Promise.reject(new Error(`copy: no such file ${src}`));
@@ -320,6 +408,30 @@ export class MemoryFs implements FsGateway {
     this.copiedPairs.push(`${src}->${dest}`);
     this.files.set(dest, content);
     return Promise.resolve();
+  }
+
+  async moveFileToReplace(source: string, destination: string): Promise<void> {
+    this.replaceAttempts.push(`${source}->${destination}`);
+    if (source === destination || source.substring(0, source.lastIndexOf('/')) !==
+      destination.substring(0, destination.lastIndexOf('/'))) {
+      throw new MemoryFsError(13900020);
+    }
+    const content = this.files.get(source);
+    if (content === undefined) {
+      throw new MemoryFsError(13900002);
+    }
+    if (this.failReplace) {
+      throw new MemoryFsError(13900012);
+    }
+    // 只模拟正常覆盖与移动前失败，不模拟原生实现中途出错/进程终止的状态。
+    this.files.set(destination, content);
+    this.files.delete(source);
+    const location = this.locationOverride.get(source);
+    if (location !== undefined) {
+      this.locationOverride.set(destination, location);
+      this.locationOverride.delete(source);
+    }
+    this.replacedPairs.push(`${source}->${destination}`);
   }
 }
 

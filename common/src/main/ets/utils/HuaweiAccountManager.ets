@@ -2,9 +2,8 @@ import { authentication } from '@kit.AccountKit';
 import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { PreferenceManager } from './PreferenceManager';
-import { hilog } from '@kit.PerformanceAnalysisKit';
-
-const TAG = 'HuaweiAccountManager';
+import { CloudBackupDiagnostics, DiagnosticKind, DiagnosticStage, DiagnosticResult, DiagnosticReason,
+  DiagnosticErrorDomain } from './CloudBackupDiagnostics';
 const PREF_KEY_LOGGED_IN = 'huawei_logged_in';
 const PREF_KEY_USER_ACCOUNT = 'huawei_user_account';
 
@@ -18,13 +17,32 @@ export enum HuaweiAccountErrorCode {
   ERROR_CODE_REQUEST_REFUSE = 1001500002,
 }
 
+// 只保留已定义的业务分支；授权错误码不进入诊断输出。
+function knownLoginErrorCode(code: number): number {
+  switch (code) {
+    case HuaweiAccountErrorCode.ERROR_CODE_LOGIN_OUT:
+    case HuaweiAccountErrorCode.ERROR_CODE_NETWORK_ERROR:
+    case HuaweiAccountErrorCode.ERROR_CODE_INTERNAL_ERROR:
+    case HuaweiAccountErrorCode.ERROR_CODE_USER_CANCEL:
+    case HuaweiAccountErrorCode.ERROR_CODE_SYSTEM_SERVICE:
+    case HuaweiAccountErrorCode.ERROR_CODE_REQUEST_REFUSE:
+      return code;
+    default: return 0;
+  }
+}
+
 export class HuaweiAccountLoginError extends Error {
   code: number = 0;
 
-  constructor(code: number, message: string) {
-    super(message);
-    this.code = code;
+  constructor(code: number) {
+    super('Huawei account authorization failed');
+    this.code = knownLoginErrorCode(code);
   }
+}
+
+// 纯数值边界：不接收异常对象、不转换字符串，不读取 accessor/message/stack。
+export function normalizeHuaweiAccountLoginError(code: number | undefined): HuaweiAccountLoginError {
+  return new HuaweiAccountLoginError(typeof code === 'number' ? code : 0);
 }
 
 export class HuaweiUserInfo {
@@ -116,8 +134,11 @@ export class HuaweiAccountManager {
         this.updatePreference();
         this.updateAppStorage();
       })
-      .catch((error: BusinessError) => {
-        hilog.error(0, TAG, `getHuaweiIDState failed: ${error.code} ${error.message}`);
+      .catch(() => {
+        const diagnostic = CloudBackupDiagnostics.begin(DiagnosticKind.SYNC);
+        CloudBackupDiagnostics.mark(diagnostic, DiagnosticStage.ACCOUNT_STATE, DiagnosticResult.FAIL,
+          { reason: DiagnosticReason.UNAVAILABLE, errorDomain: DiagnosticErrorDomain.APP });
+        CloudBackupDiagnostics.end(diagnostic);
       });
   }
 
@@ -154,32 +175,36 @@ export class HuaweiAccountManager {
    * - forceAuthorization=true 强制弹出授权页面
    * - 使用随机 UUID 作为 state 参数防止 CSRF 攻击
    */
-  private getAuthCredential(uiContext: UIContext): Promise<authentication.AuthorizationWithHuaweiIDCredential> {
-    const authRequest = new authentication.HuaweiIDProvider().createAuthorizationWithHuaweiIDRequest();
-    authRequest.scopes = ['profile'];
-    authRequest.permissions = ['serviceauthcode'];
-    authRequest.forceAuthorization = true;
-    authRequest.state = util.generateRandomUUID();
-    const controller = new authentication.AuthenticationController(uiContext.getHostContext());
-    return new Promise((resolve, reject) => {
-      controller.executeRequest(authRequest).then((result) => {
-        const response = result as authentication.AuthorizationWithHuaweiIDResponse;
-        const state = response.state;
-        if (state !== undefined && authRequest.state !== state) {
-          reject(new HuaweiAccountLoginError(0, 'state mismatch'));
-          return;
-        }
-        const credential = response.data;
-        if (!credential) {
-          reject(new HuaweiAccountLoginError(0, 'credential is missing'));
-          return;
-        }
-        resolve(credential);
-      }).catch((error: BusinessError) => {
-        hilog.error(0, TAG, `authorize failed: ${error.code} ${error.message}`);
-        reject(new HuaweiAccountLoginError(error.code, error.message));
-      });
-    });
+  private async getAuthCredential(uiContext: UIContext): Promise<authentication.AuthorizationWithHuaweiIDCredential> {
+    try {
+      const authRequest = new authentication.HuaweiIDProvider().createAuthorizationWithHuaweiIDRequest();
+      authRequest.scopes = ['profile'];
+      authRequest.permissions = ['serviceauthcode'];
+      authRequest.forceAuthorization = true;
+      authRequest.state = util.generateRandomUUID();
+      const controller = new authentication.AuthenticationController(uiContext.getHostContext());
+      const result = await controller.executeRequest(authRequest);
+      const response = result as authentication.AuthorizationWithHuaweiIDResponse;
+      const state = response.state;
+      if (state !== undefined && authRequest.state !== state) {
+        throw new HuaweiAccountLoginError(0);
+      }
+      const credential = response.data;
+      if (!credential) { throw new HuaweiAccountLoginError(0); }
+      return credential;
+    } catch (error) {
+      // 仅此 SDK 边界读取业务 code；不会送入日志，任何读取失败也使用固定错误。
+      let safeError = normalizeHuaweiAccountLoginError(undefined);
+      try { safeError = normalizeHuaweiAccountLoginError((error as BusinessError)?.code); } catch (_) { /* 固定 fallback。 */ }
+      const cancelled = HuaweiAccountManager.isUserCancel(safeError.code);
+      const diagnostic = CloudBackupDiagnostics.begin(DiagnosticKind.SYNC);
+      CloudBackupDiagnostics.mark(diagnostic, DiagnosticStage.ACCOUNT_AUTHORIZE,
+        cancelled ? DiagnosticResult.CANCELLED : DiagnosticResult.FAIL,
+        { reason: cancelled ? DiagnosticReason.CANCELLED : DiagnosticReason.UNAVAILABLE,
+          errorDomain: DiagnosticErrorDomain.APP });
+      CloudBackupDiagnostics.end(diagnostic);
+      throw safeError;
+    }
   }
 
   /** 登出：清空内存用户信息、更新 Preference 和 AppStorage（不会撤销华为 ID 授权） */

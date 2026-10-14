@@ -9,21 +9,66 @@ export interface TokenBatchDialogHost {
   buildTokenProgressDialog(params: TokenProgressDialogParams): void;
 }
 
-/** 单个模态操作拥有自己的弹窗；不提前返回成功，也不允许重复提交或误取消事务。 */
-export class TokenBatchOperation {
-  private static busy: boolean = false;
+export class TokenBatchPermit {
+  readonly owner: Object;
+  running: boolean = false;
+  constructor(owner: Object) { this.owner = owner; }
+}
 
-  static isBusy(): boolean {
-    return TokenBatchOperation.busy;
+/** 许可覆盖用户确认阶段，进度层只覆盖实际处理阶段。 */
+export class TokenBatchOperation {
+  private static active: TokenBatchPermit | undefined;
+
+  static isBusy(): boolean { return TokenBatchOperation.active !== undefined; }
+
+  static acquire(owner: Object): TokenBatchPermit | undefined {
+    if (TokenBatchOperation.isBusy()) { return undefined; }
+    const permit = new TokenBatchPermit(owner);
+    TokenBatchOperation.active = permit;
+    return permit;
+  }
+
+  static owns(owner: Object, permit: TokenBatchPermit): boolean {
+    return TokenBatchOperation.active === permit && permit.owner === owner;
+  }
+
+  static release(owner: Object, permit: TokenBatchPermit): boolean {
+    if (!TokenBatchOperation.owns(owner, permit) || permit.running) { return false; }
+    TokenBatchOperation.active = undefined;
+    return true;
+  }
+
+  static async hold<T>(owner: Object, permit: TokenBatchPermit, operation: () => Promise<T>): Promise<T> {
+    if (!TokenBatchOperation.owns(owner, permit) || permit.running) {
+      throw new Error('Invalid token operation permit');
+    }
+    permit.running = true;
+    try { return await operation(); } finally { permit.running = false; }
   }
 
   static async run(host: TokenBatchDialogHost, title: ResourceStr,
     operation: (report: TokenBatchProgressCallback) => Promise<void>): Promise<void> {
-    if (TokenBatchOperation.busy) {
-      throw new Error('A token operation is already running');
+    const permit = TokenBatchOperation.acquire(host);
+    if (permit === undefined) { throw new Error('A token operation is already running'); }
+    try {
+      await TokenBatchOperation.runWithPermit(host, title, host, permit, operation);
+    } finally {
+      TokenBatchOperation.release(host, permit);
     }
+  }
+
+  static async runWithPermit(host: TokenBatchDialogHost, title: ResourceStr, owner: Object, permit: TokenBatchPermit,
+    operation: (report: TokenBatchProgressCallback) => Promise<void>, canContinue: () => boolean = () => true,
+    cancel?: () => void): Promise<void> {
+    await TokenBatchOperation.hold(owner, permit, async () => {
+      await TokenBatchOperation.showProgress(host, title, operation, canContinue, cancel);
+    });
+  }
+
+  private static async showProgress(host: TokenBatchDialogHost, title: ResourceStr,
+    operation: (report: TokenBatchProgressCallback) => Promise<void>, canContinue: () => boolean,
+    cancel?: () => void): Promise<void> {
     const context = host.getUIContext();
-    TokenBatchOperation.busy = true;
     let dialogId: number | undefined = undefined;
     let running = true;
     const start = Date.now();
@@ -38,6 +83,9 @@ export class TokenBatchOperation {
         alignment: DialogAlignment.Center,
         onWillDismiss: (action: DismissDialogAction) => {
           if (!running) {
+            action.dismiss();
+          } else if (cancel !== undefined) {
+            cancel();
             action.dismiss();
           }
         }
@@ -62,19 +110,17 @@ export class TokenBatchOperation {
           lastUpdate = now;
         }
       };
-      await operation(report);
+      if (canContinue()) { await operation(report); }
       hilog.info(0xFF00, 'TokenBatchUI', `operation finished totalMs=${Date.now() - start}`);
     } finally {
       running = false;
       try {
         if (dialogId !== undefined) {
-          await context.getPromptAction().closeCustomDialog(dialogId);
+          context.getPromptAction().closeCustomDialog(dialogId);
         }
       } catch (_) {
         // 例如宿主已销毁；不把关闭弹窗失败误报成数据写入失败。
         hilog.warn(0xFF00, 'TokenBatchUI', 'Could not close progress dialog');
-      } finally {
-        TokenBatchOperation.busy = false;
       }
     }
   }

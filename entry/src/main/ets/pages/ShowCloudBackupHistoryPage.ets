@@ -1,25 +1,15 @@
-import { dialogSystemMaterial } from 'common';
+import { AppStorageV2 } from '@kit.ArkUI';
+import { HdsNavDestination, HdsNavDestinationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
+import {
+  AppPreference, AppWindowInfo, CloudBackupActionResult, CloudBackupDiagnostics, CloudBackupFailureReason,
+  CloudBackupIdentityStatus, CloudBackupManager, CloudBackupMetadataStatus, CloudBackupRecord,
+  CommonConstants, DeviceInfoHelper, DiagnosticKind, DiagnosticReason, DiagnosticResult, DiagnosticStage,
+  DiagnosticUiAction, dialogSystemMaterial, PREF_KEYS, showSnackBar, SnackBarNotifyType
+} from 'common';
+import { MaterialSheetStyle } from '../components/MaterialSheetStyle';
 import { MaterialTheme } from '../components/MaterialTheme';
-import { AppStorageV2, LengthMetrics } from '@kit.ArkUI';
-
-import { CloudBackupManager } from 'common';
-import { CloudBackupRecord } from 'common';
-import { AppPreference, PREF_KEYS } from 'common';
-import { AppWindowInfo } from 'common';
 import { PageScaffold } from '../components/PageScaffold';
-import { showSnackBar, SnackBarNotifyType } from 'common';
-import { hdsMaterial, HdsNavDestination, HdsNavDestinationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
-import { CommonConstants } from 'common';
-import { DeviceInfoHelper } from 'common';
-import { SyncTimeHelper } from 'common';
-import { common } from '@kit.AbilityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import { taskpool } from '@kit.ArkTS';
-import { loadBackupHistoryRecords } from 'common';
-
-const TAG = 'ShowCloudBackupHistoryPage';
-const DOMAIN = 0xFF00;
+import { SettingItem } from '../components/SettingItem';
 
 @Entry
 @Preview
@@ -27,447 +17,766 @@ const DOMAIN = 0xFF00;
 export struct ShowCloudBackupHistoryPage {
   pageInfos: NavPathStack | null = null;
   @Require @Param scrollEffectType: ScrollEffectType = ScrollEffectType.IMMERSIVE_GRADIENT_BLUR;
+  @Param inMaterialSheet: boolean = false;
   @Local backupRecords: CloudBackupRecord[] = [];
-  @Local isLoading: boolean = true;
+  @Local isLoading: boolean = false;
+  @Local isActionRunning: boolean = false;
+  @Local serviceBusy: boolean = false;
+  @Local cleanupPending: boolean = false;
+  @Local isRetryingCleanup: boolean = false;
+  @Local needsSyncRetry: boolean = false;
+  @Local confirmationOpen: boolean = false;
+  @Local isDetailVisible: boolean = false;
+  @Local selectedRecord: CloudBackupRecord | null = null;
+  @Local historyLoaded: boolean = false;
+  @Local historyError: ResourceStr = '';
+  @Local actionMessage: ResourceStr = '';
   @Local currentDeviceId: string = '';
   @Local window: AppWindowInfo = AppStorageV2.connect(AppWindowInfo) as AppWindowInfo;
-  @Local appCtx: common.UIAbilityContext = AppStorage.get('appContext') as common.UIAbilityContext;
   private backupManager: CloudBackupManager = CloudBackupManager.getInstance();
   private scroller: Scroller = new Scroller();
+  private statePollTimer: number = -1;
+  private isMounted: boolean = false;
 
-  /** 页面生命周期：获取本设备 ID，加载备份历史列表 */
   aboutToAppear(): void {
-    this.currentDeviceId = DeviceInfoHelper.getInstance().getDeviceId();
+    this.isMounted = true;
+    this.currentDeviceId = DeviceInfoHelper.getInstance().getDeviceId().trim();
+    this.refreshOperationState();
+    this.statePollTimer = setInterval(() => this.refreshOperationState(), 1000) as number;
     this.loadBackupHistory();
   }
 
-  /**
-   * 通过 TaskPool 后台线程加载备份历史记录，避免逐文件 I/O 阻塞主线程。
-   * 云端仅存（location=2）的备份本地只有元数据桩，先在主线程预缓存到本地，
-   * TaskPool 才能读取 header（deviceId/tokenCount 等）；预缓存失败（如离线）
-   * 不阻断加载，记录降级为"未知设备"展示。
-   */
-  private loadBackupHistory(): void {
+  aboutToDisappear(): void {
+    this.isMounted = false;
+    this.confirmationOpen = false;
+    if (this.statePollTimer >= 0) {
+      clearInterval(this.statePollTimer);
+      this.statePollTimer = -1;
+    }
+  }
+
+  private refreshOperationState(): void {
+    this.serviceBusy = this.backupManager.isBusy();
+    this.cleanupPending = this.backupManager.isCleanupPending();
+  }
+
+  private interactionBlocked(): boolean {
+    return this.isLoading || this.isActionRunning || this.isRetryingCleanup || this.confirmationOpen ||
+      this.serviceBusy || this.cleanupPending;
+  }
+
+  private canStartAction(): boolean {
+    this.refreshOperationState();
+    if (!this.isMounted || this.interactionBlocked()) {
+      return false;
+    }
+    return true;
+  }
+
+  /** 管理器持有缓存和 TaskPool 的同一许可，并在主线程消费有界诊断摘要。 */
+  private async loadBackupHistory(): Promise<void> {
+    if (!this.canStartAction()) {
+      return;
+    }
     this.isLoading = true;
-    const cloudDir: string = this.appCtx.cloudFileDir;
-    this.backupManager.cacheCloudOnlyBackups().catch((err: BusinessError) => {
-      hilog.warn(DOMAIN, TAG, `loadBackupHistory: pre-cache failed: ${err.code} ${err.message}`);
-    }).then(() => {
-      return taskpool.execute(loadBackupHistoryRecords, cloudDir);
-    }).then((result: Object) => {
-      this.backupRecords = result as CloudBackupRecord[];
+    this.historyError = '';
+    try {
+      const result = await this.backupManager.listBackupHistoryResult();
+      if (!this.isMounted) {
+        return;
+      }
+      if (result.success) {
+        this.currentDeviceId = DeviceInfoHelper.getInstance().getDeviceId().trim();
+        this.historyLoaded = true;
+        this.backupRecords = result.records;
+        if (this.selectedRecord !== null) {
+          const selectedId = this.selectedRecord.id;
+          this.selectedRecord = this.backupRecords.find((record: CloudBackupRecord) => record.id === selectedId) ?? null;
+          if (this.selectedRecord === null) {
+            this.isDetailVisible = false;
+          }
+        }
+      } else {
+        // 读取失败保留上一次列表，不能用空列表冒充“没有备份”。
+        this.historyError = this.failureText(result.reason, $r('app.string.cloud_backup_history_load_failed'));
+      }
+    } catch (_) {
+      if (this.isMounted) {
+        this.historyError = $r('app.string.cloud_backup_history_load_failed');
+      }
+    } finally {
       this.isLoading = false;
-    }).catch((err: BusinessError) => {
-      this.isLoading = false;
-      hilog.error(DOMAIN, TAG, `loadBackupHistory: taskpool failed: ${err.code} ${err.message}`);
-    });
+      this.refreshOperationState();
+    }
   }
 
-  /** 筛选当前设备的备份记录 */
+  private hasKnownSource(record: CloudBackupRecord): boolean {
+    return record.metadataStatus === CloudBackupMetadataStatus.VALID &&
+      record.identityStatus !== CloudBackupIdentityStatus.ID_MISSING &&
+      record.deviceId.trim() !== '' && record.deviceId.trim() !== 'unknown_odid';
+  }
+
+  private isCurrentDevice(record: CloudBackupRecord): boolean {
+    return this.currentDeviceId !== '' && this.currentDeviceId !== 'unknown_odid' &&
+      this.hasKnownSource(record) && record.deviceId === this.currentDeviceId;
+  }
+
   private getDeviceRecords(): CloudBackupRecord[] {
-    return this.backupRecords.filter(r => r.deviceId === this.currentDeviceId);
+    return this.backupRecords.filter((record: CloudBackupRecord) => this.isCurrentDevice(record));
   }
 
-  /** 筛选其他设备的备份记录 */
   private getOtherDeviceRecords(): CloudBackupRecord[] {
-    return this.backupRecords.filter(r => r.deviceId !== this.currentDeviceId);
+    return this.backupRecords.filter((record: CloudBackupRecord) => !this.isCurrentDevice(record) && this.hasKnownSource(record));
+  }
+
+  private getUnknownSourceRecords(): CloudBackupRecord[] {
+    return this.backupRecords.filter((record: CloudBackupRecord) => !this.hasKnownSource(record));
+  }
+
+  private sourceText(record: CloudBackupRecord): ResourceStr {
+    if (!this.hasKnownSource(record)) {
+      return $r('app.string.cloud_backup_source_unknown');
+    }
+    return this.isCurrentDevice(record) ? $r('app.string.cloud_backup_this_device') :
+      $r('app.string.cloud_backup_source_other');
+  }
+
+  private deviceNameText(record: CloudBackupRecord): ResourceStr {
+    if (record.metadataStatus !== CloudBackupMetadataStatus.VALID) {
+      return $r('app.string.cloud_backup_unknown_device');
+    }
+    return record.deviceName.trim() !== '' ? record.deviceName : $r('app.string.cloud_backup_name_missing');
+  }
+
+  private metadataText(record: CloudBackupRecord): ResourceStr {
+    switch (record.metadataStatus) {
+      case CloudBackupMetadataStatus.VALID:
+        return $r('app.string.cloud_backup_metadata_valid');
+      case CloudBackupMetadataStatus.PENDING:
+        return $r('app.string.cloud_backup_metadata_pending');
+      case CloudBackupMetadataStatus.READ_FAILED:
+        return $r('app.string.cloud_backup_metadata_read_failed');
+      case CloudBackupMetadataStatus.INVALID:
+        return $r('app.string.cloud_backup_metadata_invalid');
+      default:
+        return $r('app.string.cloud_backup_metadata_unknown');
+    }
+  }
+
+  private locationText(record: CloudBackupRecord): ResourceStr {
+    switch (record.location) {
+      case 1:
+        return $r('app.string.cloud_backup_location_local');
+      case 2:
+        return $r('app.string.cloud_sync_status_cloud_only');
+      case 3:
+        return $r('app.string.cloud_backup_location_both');
+      default:
+        return $r('app.string.cloud_backup_location_unknown');
+    }
+  }
+
+  private tokenCountText(record: CloudBackupRecord): ResourceStr {
+    return record.metadataStatus === CloudBackupMetadataStatus.VALID && record.tokenCountKnown === true &&
+      Number.isInteger(record.tokenCount) && record.tokenCount >= 0 ?
+      $r('app.string.cloud_backup_record_tokens', record.tokenCount) : $r('app.string.cloud_backup_count_unknown');
+  }
+
+  private sizeText(record: CloudBackupRecord): ResourceStr {
+    if (!Number.isFinite(record.size) || record.size < 0) {
+      return $r('app.string.cloud_backup_value_unknown');
+    }
+    return record.size < 1024 ? `${record.size} B` : `${(record.size / 1024).toFixed(1)} KB`;
+  }
+
+  private recordDateText(record: CloudBackupRecord): ResourceStr {
+    return record.date.trim() !== '' ? record.date : $r('app.string.cloud_backup_value_unknown');
+  }
+
+  private isEnumerated(record: CloudBackupRecord): boolean {
+    return this.backupRecords.some((item: CloudBackupRecord) => item.id === record.id);
+  }
+
+  private canRestore(record: CloudBackupRecord): boolean {
+    return this.isEnumerated(record) && record.metadataStatus === CloudBackupMetadataStatus.VALID;
+  }
+
+  private openDetail(record: CloudBackupRecord): void {
+    if (!this.canStartAction() || !this.isEnumerated(record)) {
+      return;
+    }
+    this.selectedRecord = record;
+    this.actionMessage = '';
+    this.isDetailVisible = true;
+  }
+
+  private detailSheetOptions(): SheetOptions {
+    const options = MaterialSheetStyle.options(SheetSize.MEDIUM);
+    options.backgroundColor = $r('app.color.window_background');
+    options.detents = [SheetSize.MEDIUM, SheetSize.LARGE];
+    return options;
+  }
+
+  private pageBackground(): ResourceColor {
+    return this.inMaterialSheet ? MaterialTheme.surfaceBackground($r('app.color.window_background')) :
+      $r('app.color.window_background');
   }
 
   build() {
     HdsNavDestination() {
-      PageScaffold() {
-        RelativeContainer() {
-          Stack() {
-            if (this.isLoading) {
-              Column() {
-                LoadingProgress()
-                  .color($r('sys.color.font_primary'))
-                  .width(LengthMetrics.vp(80).value).height(LengthMetrics.vp(80).value)
+      PageScaffold({ bgColor: this.pageBackground() }) {
+        List({ space: 12, scroller: this.scroller }) {
+          ListItem().height(CommonConstants.AVOID_TOP_BASE_HEIGHT)
+          ListItem() {
+            Column({ space: 12 }) {
+              if (this.isLoading || this.isActionRunning || this.isRetryingCleanup) {
+                LoadingProgress().width(36).height(36).color($r('app.color.str_main'))
+                Text($r('app.string.cloud_backup_operation_running'))
+                  .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                  .fontColor($r('sys.color.font_secondary'))
+              }
+              if (this.cleanupPending) {
+                this.CleanupPendingContent()
+              } else if (this.serviceBusy && !this.isLoading && !this.isActionRunning) {
+                Text($r('app.string.cloud_backup_operation_busy'))
+                  .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                  .fontColor($r('sys.color.font_secondary'))
+              }
+              if (this.historyError !== '') {
+                Text(this.historyError)
+                  .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                  .fontColor($r('sys.color.ohos_id_color_warning'))
+              }
+              if (!this.isDetailVisible && this.actionMessage !== '') {
+                Text(this.actionMessage)
+                  .fontSize($r('sys.float.ohos_id_text_size_body2'))
+                  .fontColor($r('sys.color.font_secondary'))
+              }
+              if (this.needsSyncRetry && !this.cleanupPending) {
+                Button($r('app.string.cloud_backup_retry_sync'))
+                  .labelStyle({ maxLines: 4 }).constraintSize({ minHeight: 48 }).width('100%')
+                  .enabled(!this.interactionBlocked())
+                  .onClick(() => this.retrySync())
+              }
+              Button($r('app.string.cloud_backup_refresh'))
+                .labelStyle({ maxLines: 4 }).constraintSize({ minHeight: 48 }).width('100%')
+                .enabled(!this.interactionBlocked())
+                .onClick(() => this.loadBackupHistory())
+            }
+            .width('100%')
+          }
+          if (this.historyLoaded && this.backupRecords.length === 0 && !this.isLoading && this.historyError === '') {
+            ListItem() {
+              Text($r('app.string.cloud_backup_history_empty'))
+                .fontSize($r('sys.float.ohos_id_text_size_body1'))
+                .fontColor($r('sys.color.font_secondary'))
+                .width('100%').textAlign(TextAlign.Center).padding(24)
+            }
+          }
+          if (this.getDeviceRecords().length > 0) {
+            ListItem() { this.GroupTitle($r('app.string.cloud_backup_this_device')) }
+            ForEach(this.getDeviceRecords(), (record: CloudBackupRecord) => {
+              ListItem() { this.BackupRecordItem(record) }
+            }, (record: CloudBackupRecord) => record.id)
+          }
+          if (this.getOtherDeviceRecords().length > 0) {
+            ListItem() { this.GroupTitle($r('app.string.cloud_backup_other_devices')) }
+            ForEach(this.getOtherDeviceRecords(), (record: CloudBackupRecord) => {
+              ListItem() { this.BackupRecordItem(record) }
+            }, (record: CloudBackupRecord) => record.id)
+          }
+          if (this.getUnknownSourceRecords().length > 0) {
+            ListItem() { this.GroupTitle($r('app.string.cloud_backup_source_unknown')) }
+            ForEach(this.getUnknownSourceRecords(), (record: CloudBackupRecord) => {
+              ListItem() { this.BackupRecordItem(record) }
+            }, (record: CloudBackupRecord) => record.id)
+            ListItem() {
+              Column({ space: 8 }) {
+                Text($r('app.string.cloud_backup_unknown_cleanup_hint'))
+                  .fontSize($r('sys.float.ohos_id_text_size_body2')).fontColor($r('sys.color.font_secondary')).width('100%')
+                Button($r('app.string.cloud_backup_unknown_cleanup_entry'))
+                  .fontColor($r('sys.color.ohos_id_color_warning')).backgroundColor($r('sys.color.comp_background_gray'))
+                  .width('100%').labelStyle({ maxLines: 4 }).constraintSize({ minHeight: 48 })
+                  .enabled(!this.interactionBlocked())
+                  .onClick(() => this.showUnknownCleanupConfirmDialog())
               }
               .width('100%')
-              .height('100%')
-              .justifyContent(FlexAlign.Center)
             }
-            else
-            {
-              Column() {
-                if (this.backupRecords.length === 0 && !this.isLoading) {
-                  Column() {
-                    SymbolGlyph($r('sys.symbol.rectangle_split_3x1'))
-                      .fontSize(LengthMetrics.vp(48).value)
-                      .fontColor([$r('sys.color.ohos_id_color_text_secondary')])
-                    Text($r('app.string.cloud_backup_history_empty'))
-                      .fontSize($r('sys.float.ohos_id_text_size_body1'))
-                      .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-                      .margin({ top: $r('sys.float.padding_level2') })
-                  }
-                  .width('100%')
-                  .layoutWeight(1)
-                  .justifyContent(FlexAlign.Center)
-                  .alignItems(HorizontalAlign.Center)
-                } else {
-                  List({ space: LengthMetrics.vp(10).value, scroller: this.scroller }) {
-                    ListItem()
-                      .height(CommonConstants.AVOID_TOP_BASE_HEIGHT)
-
-                    if (this.getDeviceRecords().length > 0) {
-                      ListItem() {
-                        Row() {
-                          Text($r('app.string.cloud_backup_this_device'))
-                            .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
-                            .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-                            .fontWeight(FontWeight.Medium)
-                        }
-                        .width('100%')
-                        .padding({ left: $r('sys.float.padding_level8'), top: LengthMetrics.vp(4).value, bottom: LengthMetrics.vp(2).value })
-                      }
-
-                      ForEach(this.getDeviceRecords(), (record: CloudBackupRecord) => {
-                        ListItem() {
-                          this.BackupRecordItem(record, true)
-                        }
-                      }, (record: CloudBackupRecord) => record.id)
-                    }
-
-                    if (this.getOtherDeviceRecords().length > 0) {
-                      ListItem() {
-                        Row() {
-                          Text($r('app.string.cloud_backup_other_devices'))
-                            .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
-                            .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-                            .fontWeight(FontWeight.Medium)
-                        }
-                        .width('100%')
-                        .padding({ left: $r('sys.float.padding_level8'), top: $r('sys.float.padding_level2'), bottom: LengthMetrics.vp(2).value })
-                      }
-
-                      ForEach(this.getOtherDeviceRecords(), (record: CloudBackupRecord) => {
-                        ListItem() {
-                          this.BackupRecordItem(record, false)
-                        }
-                      }, (record: CloudBackupRecord) => record.id)
-                    }
-                  }
-                  .chainAnimation(AppPreference.getPreference(PREF_KEYS.APPEARANCE_CHAIN_ANIMATION_ENABLE) as boolean)
-                  .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-                  .scrollBar(BarState.Off)
-                  .backgroundColor($r('app.color.window_background'))
-                  .width('100%')
-                  .layoutWeight(1)
-                  .padding({ left: $r('sys.float.padding_level8'), right: $r('sys.float.padding_level8'), bottom: $r('sys.float.padding_level8') })
-                }
-
-                Row() {
-                  Text($r('app.string.cloud_backup_history_max_hint'))
-                    .fontSize($r('sys.float.ohos_id_text_size_caption'))
-                    .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-                }
-                .width('100%')
-                .justifyContent(FlexAlign.Center)
-                .padding({ bottom: $r('sys.float.padding_level2') })
-
-                Row() {
-                  Text($r('app.string.cloud_sync_device_id_hint'))
-                    .fontSize($r('sys.float.ohos_id_text_size_caption'))
-                    .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-                }
-                .width('100%')
-                .padding({ left: $r('sys.float.padding_level8'), right: $r('sys.float.padding_level8'), bottom: $r('sys.float.padding_level8') })
-              }
-              .width('100%')
-              .height('100%')
+          }
+          ListItem() {
+            Column({ space: 8 }) {
+              Text($r('app.string.cloud_backup_history_max_hint'))
+                .fontSize($r('sys.float.ohos_id_text_size_caption')).fontColor($r('sys.color.font_secondary'))
+              Text($r('app.string.cloud_sync_device_id_hint'))
+                .fontSize($r('sys.float.ohos_id_text_size_caption')).fontColor($r('sys.color.font_secondary'))
+              Text($r('app.string.cloud_backup_location_hint'))
+                .fontSize($r('sys.float.ohos_id_text_size_caption')).fontColor($r('sys.color.font_secondary'))
             }
-
+            .alignItems(HorizontalAlign.Start).width('100%').padding({ top: 12, bottom: 16 })
           }
         }
+        .chainAnimation(AppPreference.getPreference(PREF_KEYS.APPEARANCE_CHAIN_ANIMATION_ENABLE) as boolean)
+        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+        .scrollBar(BarState.Off)
+        .backgroundColor(this.pageBackground())
+        .width('100%').height('100%')
+        .padding({ left: 16, right: 16 })
+        .contentEndOffset(this.window.AvoidBottomHeight + 16)
       }
     }
+    .backgroundColor(this.pageBackground())
+    .bindSheet($$this.isDetailVisible, this.BackupDetailSheet(), this.detailSheetOptions())
     .bindToScrollable([this.scroller])
     .titleMode(HdsNavDestinationTitleMode.MODAL)
     .titleBar({
       style: {
         originalStyle: {
           contentStyle: {
-            titleStyle: {
-              mainTitleColor: $r('sys.color.font_primary'),
-              subTitleColor: $r('sys.color.font_secondary')
-            },
+            titleStyle: { mainTitleColor: $r('sys.color.font_primary'), subTitleColor: $r('sys.color.font_secondary') },
             backIconStyle: MaterialTheme.navigationIconStyle(),
             menuStyle: MaterialTheme.navigationIconStyle()
-          },
+          }
         },
         scrollEffectStyle: MaterialTheme.navigationScrollStyle(),
-        scrollEffectOpts: {
-          enableScrollEffect: true,
-          scrollEffectType: this.scrollEffectType
-        },
+        scrollEffectOpts: { enableScrollEffect: true, scrollEffectType: this.scrollEffectType },
         systemMaterialEffect: {
           materialType: MaterialTheme.hdsMaterialType(),
-          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+          materialLevel: MaterialTheme.hdsMaterialLevel()
         }
       },
-      content: {
-        title: {
-          mainTitle: $r('app.string.cloud_backup_history_title'),
-        },
-      }
+      content: { title: { mainTitle: $r('app.string.cloud_backup_history_title') } }
     })
-    .onReady((context: NavDestinationContext) => {
-      this.pageInfos = context.pathStack;
-    })
+    .onReady((context: NavDestinationContext) => { this.pageInfos = context.pathStack; })
   }
 
-  /** 备份记录卡片：左侧图标+元数据（日期/令牌数/大小/加密标识），右侧操作按钮（恢复/删除） */
   @Builder
-  BackupRecordItem(record: CloudBackupRecord, isCurrentDevice: boolean) {
-    Column() {
-      Row({ space: LengthMetrics.vp(12).value }) {
-        Column() {
-          SymbolGlyph($r('sys.symbol.doc_text'))
-            .fontSize(LengthMetrics.vp(24).value)
-            .fontColor([$r('app.color.str_main')])
-        }
-        .width(LengthMetrics.vp(44).value)
-        .height(LengthMetrics.vp(44).value)
-        .borderRadius($r('sys.float.corner_radius_level4'))
-        .backgroundColor($r('app.color.item_bg'))
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
+  GroupTitle(title: ResourceStr) {
+    Text(title)
+      .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
+      .fontColor($r('sys.color.font_secondary')).fontWeight(FontWeight.Medium)
+      .width('100%').padding({ left: 8, top: 8, bottom: 2 })
+  }
 
-        Column({ space: LengthMetrics.vp(4).value }) {
-          Text(record.date)
-            .fontSize($r('sys.float.ohos_id_text_size_body1'))
-            .fontColor($r('sys.color.ohos_id_color_text_primary'))
-            .fontWeight(FontWeight.Medium)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-          Row({ space: LengthMetrics.vp(8).value }) {
-            // deviceId 为空 = header 未解析（云端文件未缓存成功），显示兜底提示而非误报 0 个令牌
-            if (record.deviceId === '') {
-              Text($r('app.string.cloud_backup_meta_not_synced'))
-                .fontSize($r('sys.float.ohos_id_text_size_caption'))
-                .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-            } else {
-              Text($r('app.string.cloud_backup_record_tokens', record.tokenCount))
-                .fontSize($r('sys.float.ohos_id_text_size_caption'))
-                .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-            }
-
-            Text(this.formatSize(record.size))
-              .fontSize($r('sys.float.ohos_id_text_size_caption'))
-              .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-
-            if (record.encrypted) {
-              Row({ space: LengthMetrics.vp(2).value }) {
-                SymbolGlyph($r('sys.symbol.lock'))
-                  .fontSize(LengthMetrics.vp(10).value)
-                  .fontColor([$r('app.color.str_main')])
-              }
-            }
-          }
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-
-        Row({ space: LengthMetrics.vp(6).value }) {
-          SymbolGlyph($r('sys.symbol.arrowshape_down_to_line_fill'))
-            .fontSize(LengthMetrics.vp(20).value)
-            .fontColor([$r('app.color.str_main')])
-            .onClick(() => {
-              this.showRestoreConfirmDialog(record);
-            })
-
-          if (isCurrentDevice) {
-            SymbolGlyph($r('sys.symbol.trash'))
-              .fontSize(LengthMetrics.vp(20).value)
-              .fontColor([$r('sys.color.ohos_id_color_warning')])
-              .onClick(() => {
-                this.showDeleteConfirmDialog(record);
-              })
-          }
-        }
-        .alignItems(VerticalAlign.Center)
+  /** 整张卡片打开详情，不用小图标承担恢复或危险操作。 */
+  @Builder
+  BackupRecordItem(record: CloudBackupRecord) {
+    Button({ type: ButtonType.Normal }) {
+      Column({ space: 8 }) {
+        Text(this.recordDateText(record))
+          .fontSize($r('sys.float.ohos_id_text_size_body1')).fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary'))
+        Text(this.deviceNameText(record))
+          .fontSize($r('sys.float.ohos_id_text_size_body2')).fontColor($r('sys.color.font_secondary'))
+        Text(this.metadataText(record))
+          .fontSize($r('sys.float.ohos_id_text_size_body2'))
+          .fontColor(record.metadataStatus === CloudBackupMetadataStatus.INVALID ?
+            $r('sys.color.ohos_id_color_warning') : $r('sys.color.font_secondary'))
+        Text(this.tokenCountText(record))
+          .fontSize($r('sys.float.ohos_id_text_size_caption')).fontColor($r('sys.color.font_secondary'))
+        Text(this.locationText(record))
+          .fontSize($r('sys.float.ohos_id_text_size_caption')).fontColor($r('sys.color.font_secondary'))
+        Text($r('app.string.cloud_backup_view_details'))
+          .fontSize($r('sys.float.ohos_id_text_size_body2')).fontColor($r('app.color.str_main'))
       }
-      .width('100%')
-      .padding($r('sys.float.padding_level8'))
-      .alignItems(VerticalAlign.Center)
+      .width('100%').alignItems(HorizontalAlign.Start).padding(16)
+    }
+    .width('100%').backgroundColor($r('app.color.item_bg'))
+    .borderRadius($r('sys.float.ohos_id_menu_outer_border_radius'))
+    .shadow({ radius: 6, color: $r('app.color.shadow'), offsetX: 0, offsetY: 2 })
+    .enabled(!this.interactionBlocked())
+    .onClick(() => this.openDetail(record))
+  }
 
-      Row() {
-        SymbolGlyph($r('sys.symbol.icloud'))
-          .fontSize(LengthMetrics.vp(12).value)
-          .fontColor([$r('sys.color.ohos_id_color_text_secondary')])
-        Text(record.deviceName === '' ? $r('app.string.cloud_backup_unknown_device') : record.deviceName)
-          .fontSize($r('sys.float.ohos_id_text_size_caption'))
-          .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-          .margin({ left: LengthMetrics.vp(4).value })
+  @Builder
+  DetailValue(label: ResourceStr, value: ResourceStr) {
+    Column({ space: 4 }) {
+      Text(label).fontSize($r('sys.float.ohos_id_text_size_caption')).fontColor($r('sys.color.font_secondary'))
+      Text(value).fontSize($r('sys.float.ohos_id_text_size_body1')).fontColor($r('sys.color.font_primary'))
+    }
+    .alignItems(HorizontalAlign.Start).width('100%').padding(12)
+  }
 
-          Text('·')
-          .fontSize($r('sys.float.ohos_id_text_size_caption'))
-          .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-          .margin({ left: LengthMetrics.vp(4).value, right: LengthMetrics.vp(4).value })
-
-        if (record.location === 2) {
-          SymbolGlyph($r('sys.symbol.arrow_down_circle'))
-            .fontSize(LengthMetrics.vp(12).value)
-            .fontColor([$r('sys.color.ohos_id_color_text_secondary')])
-          Text($r('app.string.cloud_sync_status_cloud_only'))
-            .fontSize($r('sys.float.ohos_id_text_size_caption'))
-            .fontColor($r('sys.color.ohos_id_color_text_secondary'))
-            .margin({ left: LengthMetrics.vp(2).value })
-        } else {
-          SymbolGlyph($r('sys.symbol.checkmark_circle'))
-            .fontSize(LengthMetrics.vp(12).value)
-            .fontColor([$r('app.color.str_main')])
-          Text($r('app.string.cloud_sync_status_synced'))
-            .fontSize($r('sys.float.ohos_id_text_size_caption'))
-            .fontColor($r('app.color.str_main'))
-            .margin({ left: LengthMetrics.vp(2).value })
-        }
-      }
-      .padding({ left: LengthMetrics.vp(68).value, bottom: LengthMetrics.vp(10).value })
-      .width('100%')
+  @Builder
+  CleanupPendingContent() {
+    Column({ space: 12 }) {
+      Text($r('app.string.cloud_backup_cleanup_pending'))
+        .fontSize($r('sys.float.ohos_id_text_size_body2')).fontColor($r('sys.color.ohos_id_color_warning'))
+      Button($r('app.string.cloud_backup_retry_cleanup'))
+        .labelStyle({ maxLines: 4 }).constraintSize({ minHeight: 48 }).width('100%')
+        .enabled(!this.isLoading && !this.isActionRunning && !this.isRetryingCleanup && !this.confirmationOpen)
+        .onClick(() => this.retryCleanup())
     }
     .width('100%')
-    .backgroundColor($r('app.color.item_bg'))
-    .borderRadius($r('sys.float.ohos_id_menu_outer_border_radius'))
-    .shadow({ radius: 10, color: $r('app.color.shadow'), offsetX: 10, offsetY: 10 })
   }
 
-  /** 文件大小格式化：<1KB 显示字节，否则显示 KB */
-  private formatSize(bytes: number): string {
-    if (bytes < 1024) {
-      return `${bytes} B`;
-    }
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-
-  /** 恢复确认弹窗：底部 AlertDialog，确认后调用 triggerRestore 解密并写入令牌 */
-  private showRestoreConfirmDialog(record: CloudBackupRecord): void {
-    this.getUIContext().showAlertDialog({
-      systemMaterial: dialogSystemMaterial(),
-      title: $r('app.string.cloud_backup_restore_confirm_title'),
-      message: $r('app.string.cloud_backup_restore_confirm_msg', record.date),
-      autoCancel: true,
-      alignment: DialogAlignment.Bottom,
-      gridCount: 4,
-      offset: { dx: 0, dy: -20 },
-      buttonDirection: DialogButtonDirection.HORIZONTAL,
-      buttons: [
-        {
-          value: $r('app.string.dialog_btn_confirm'),
-          action: () => {
-            this.triggerRestore(record.id);
+  @Builder
+  BackupDetailSheet() {
+    Scroll() {
+      Column({ space: 16 }) {
+        Text($r('app.string.cloud_backup_detail_title'))
+          .fontSize($r('sys.float.Subtitle_M')).fontWeight(FontWeight.Bold)
+          .fontColor($r('sys.color.font_primary')).width('100%')
+        if (this.selectedRecord !== null) {
+          SettingItem({ title: $r('app.string.cloud_backup_detail_metadata') }) {
+            this.DetailValue($r('app.string.cloud_backup_detail_date'), this.recordDateText(this.selectedRecord))
+            this.DetailValue($r('app.string.cloud_backup_detail_source'), this.sourceText(this.selectedRecord))
+            this.DetailValue($r('app.string.cloud_backup_detail_device'), this.deviceNameText(this.selectedRecord))
+            this.DetailValue($r('app.string.cloud_backup_detail_content'), this.metadataText(this.selectedRecord))
+            this.DetailValue($r('app.string.cloud_backup_detail_location'), this.locationText(this.selectedRecord))
+            this.DetailValue($r('app.string.cloud_backup_detail_size'), this.sizeText(this.selectedRecord))
+            this.DetailValue($r('app.string.cloud_sync_token_count'), this.tokenCountText(this.selectedRecord))
           }
-        },
-        {
-          value: $r('app.string.dialog_btn_cancel'),
-          action: () => {}
-        },
-      ],
-      cancel: () => {},
-    });
-  }
-
-  /** 删除确认弹窗：仅当前设备的备份可删除，底部 AlertDialog 二次确认 */
-  private showDeleteConfirmDialog(record: CloudBackupRecord): void {
-    this.getUIContext().showAlertDialog({
-      systemMaterial: dialogSystemMaterial(),
-      title: $r('app.string.cloud_backup_delete_confirm_title'),
-      message: $r('app.string.cloud_backup_delete_confirm_msg', record.date),
-      autoCancel: true,
-      alignment: DialogAlignment.Bottom,
-      gridCount: 4,
-      offset: { dx: 0, dy: -20 },
-      buttonDirection: DialogButtonDirection.HORIZONTAL,
-      buttons: [
-        {
-          value: $r('app.string.dialog_btn_confirm'),
-          action: () => {
-            this.triggerDelete(record.id);
+          Text($r('app.string.cloud_backup_detail_privacy_hint'))
+            .fontSize($r('sys.float.ohos_id_text_size_caption')).fontColor($r('sys.color.font_secondary'))
+            .width('100%')
+          if (this.actionMessage !== '') {
+            Text(this.actionMessage)
+              .fontSize($r('sys.float.ohos_id_text_size_body2')).fontColor($r('sys.color.font_secondary')).width('100%')
           }
-        },
-        {
-          value: $r('app.string.dialog_btn_cancel'),
-          action: () => {}
-        },
-      ],
-      cancel: () => {},
-    });
-  }
-
-  /** 触发恢复：调用 CloudBackupManager 解密备份文件并逐条 upsert 令牌到本地存储 */
-  private triggerRestore(recordId: string): void {
-    this.isLoading = true;
-    this.backupManager.restoreFromBackupRecord(recordId).then((success: boolean) => {
-      this.isLoading = false;
-      if (success) {
-        showSnackBar($r('app.string.cloud_backup_restore_success'), SnackBarNotifyType.SUCCESS);
-      } else {
-        showSnackBar($r('app.string.cloud_backup_restore_failed'), SnackBarNotifyType.WARNING);
-      }
-    }).catch((err: BusinessError) => {
-      this.isLoading = false;
-      hilog.error(DOMAIN, TAG, `triggerRestore: error: ${err.code} ${err.message}`);
-      showSnackBar($r('app.string.cloud_backup_restore_failed'), SnackBarNotifyType.WARNING);
-    });
-  }
-
-  /** 触发删除：调用 CloudBackupManager 删除云端文件 + 同步，成功后更新 lastSyncTime 并刷新列表 */
-  private triggerDelete(recordId: string): void {
-    this.isLoading = true;
-    this.backupManager.deleteBackupRecord(recordId).then((success: boolean) => {
-      this.isLoading = false;
-      if (success) {
-        this.updateLastSyncTimeAfterDelete(recordId);
-        showSnackBar($r('app.string.cloud_backup_delete_success'), SnackBarNotifyType.SUCCESS);
-        this.loadBackupHistory();
-      } else {
-        showSnackBar($r('app.string.cloud_backup_delete_failed'), SnackBarNotifyType.WARNING);
-      }
-    }).catch((err: BusinessError) => {
-      this.isLoading = false;
-      hilog.error(DOMAIN, TAG, `triggerDelete: error: ${err.code} ${err.message}`);
-      showSnackBar($r('app.string.cloud_backup_delete_failed'), SnackBarNotifyType.WARNING);
-    });
-  }
-
-  /**
-   * 删除备份记录后更新 lastSyncTime：
-   * 如果删除的是今天的备份，尝试用剩余今天记录的最新时间戳替换；
-   * 若今天无剩余记录，则设为昨天末尾时间戳。
-   */
-  private updateLastSyncTimeAfterDelete(deletedRecordId: string): void {
-    const rawTime = AppPreference.getPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME) as string;
-    const lastTs = SyncTimeHelper.parseStoredTimestamp(rawTime);
-    if (lastTs <= 0 || !SyncTimeHelper.isToday(lastTs)) {
-      return;
-    }
-    let deletedIsToday = false;
-    for (const record of this.backupRecords) {
-      if (record.id === deletedRecordId) {
-        if (SyncTimeHelper.isToday(record.timestamp)) {
-          deletedIsToday = true;
+          if (this.isActionRunning || this.isLoading || this.isRetryingCleanup) {
+            LoadingProgress().width(36).height(36)
+            Text($r('app.string.cloud_backup_operation_running'))
+              .fontSize($r('sys.float.ohos_id_text_size_body2')).fontColor($r('sys.color.font_secondary'))
+          }
+          if (this.cleanupPending) {
+            this.CleanupPendingContent()
+          }
+          Button($r('app.string.cloud_backup_restore_confirm_title'))
+            .labelStyle({ maxLines: 4 }).constraintSize({ minHeight: 48 }).width('100%')
+            .enabled(!this.interactionBlocked() && this.canRestore(this.selectedRecord))
+            .onClick(() => {
+              if (this.selectedRecord !== null) { this.showRestoreConfirmDialog(this.selectedRecord); }
+            })
+          if (this.selectedRecord.metadataStatus !== CloudBackupMetadataStatus.VALID) {
+            Text($r('app.string.cloud_backup_restore_requires_metadata'))
+              .fontSize($r('sys.float.ohos_id_text_size_body2')).fontColor($r('sys.color.font_secondary')).width('100%')
+            Button($r('app.string.cloud_backup_refresh'))
+              .labelStyle({ maxLines: 4 }).constraintSize({ minHeight: 48 }).width('100%').enabled(!this.interactionBlocked())
+              .onClick(() => this.loadBackupHistory())
+          }
+          SettingItem({ title: $r('app.string.cloud_backup_danger_zone') }) {
+            Column({ space: 12 }) {
+              Text($r('app.string.cloud_backup_delete_local_unaffected'))
+                .fontSize($r('sys.float.ohos_id_text_size_body2')).fontColor($r('sys.color.font_secondary')).width('100%')
+              Button($r('app.string.cloud_backup_delete_confirm_title'))
+                .fontColor($r('sys.color.ohos_id_color_warning')).backgroundColor($r('sys.color.comp_background_gray'))
+                .labelStyle({ maxLines: 4 }).constraintSize({ minHeight: 48 }).width('100%')
+                .enabled(!this.interactionBlocked())
+                .onClick(() => {
+                  if (this.selectedRecord !== null) { this.showDeleteConfirmDialog(this.selectedRecord); }
+                })
+            }
+            .padding(16).width('100%')
+          }
         }
-        break;
       }
+      .padding({ left: 20, right: 20, top: 20, bottom: this.window.AvoidBottomHeight + 24 })
+      .width('100%').alignItems(HorizontalAlign.Start)
     }
-    if (!deletedIsToday) {
+    .width('100%').height('100%').scrollBar(BarState.Off)
+    .backgroundColor(MaterialTheme.surfaceBackground($r('app.color.window_background')))
+  }
+
+  private selectionStillValid(record: CloudBackupRecord): boolean {
+    return this.isMounted && this.isDetailVisible && this.selectedRecord?.id === record.id && this.isEnumerated(record);
+  }
+
+  private showRestoreConfirmDialog(record: CloudBackupRecord): void {
+    if (!this.canStartAction() || !this.selectionStillValid(record) || !this.canRestore(record)) {
       return;
     }
-    let latestRemainingTs: number = 0;
-    for (const record of this.backupRecords) {
-      if (record.id === deletedRecordId) {
-        continue;
-      }
-      if (SyncTimeHelper.isToday(record.timestamp) && record.timestamp > latestRemainingTs) {
-        latestRemainingTs = record.timestamp;
-      }
+    this.confirmationOpen = true;
+    try {
+      this.getUIContext().showAlertDialog({
+        systemMaterial: dialogSystemMaterial(),
+        title: $r('app.string.cloud_backup_restore_confirm_title'),
+        message: $r('app.string.cloud_backup_restore_confirm_msg', record.date),
+        autoCancel: true, alignment: DialogAlignment.Bottom, gridCount: 4,
+        offset: { dx: 0, dy: -20 }, buttonDirection: DialogButtonDirection.VERTICAL,
+        buttons: [
+          { value: $r('app.string.cloud_backup_restore_confirm_title'), action: () => {
+            this.confirmationOpen = false;
+            if (this.selectionStillValid(record) && this.canRestore(record)) { this.triggerRestore(record); }
+          } },
+          { value: $r('app.string.dialog_btn_cancel'), action: () => { this.confirmationOpen = false; } }
+        ],
+        cancel: () => { this.confirmationOpen = false; }
+      });
+    } catch (_) {
+      this.confirmationOpen = false;
+      showSnackBar($r('app.string.cloud_backup_restore_failed'), SnackBarNotifyType.WARNING);
     }
-    if (latestRemainingTs > 0) {
-      AppPreference.setPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME, `${latestRemainingTs}`);
-    } else {
-      AppPreference.setPreference(PREF_KEYS.CLOUD_SYNC_LAST_TIME, `${SyncTimeHelper.getYesterdayEndTs()}`);
+  }
+
+  private showDeleteConfirmDialog(record: CloudBackupRecord): void {
+    if (!this.canStartAction() || !this.selectionStillValid(record)) {
+      return;
+    }
+    const message = !this.hasKnownSource(record) ? $r('app.string.cloud_backup_delete_unknown_confirm', record.date) :
+      this.isCurrentDevice(record) ? $r('app.string.cloud_backup_delete_confirm_msg', record.date) :
+        $r('app.string.cloud_backup_delete_other_confirm', record.date);
+    this.confirmationOpen = true;
+    try {
+      this.getUIContext().showAlertDialog({
+        systemMaterial: dialogSystemMaterial(),
+        title: $r('app.string.cloud_backup_delete_confirm_title'), message: message,
+        autoCancel: true, alignment: DialogAlignment.Bottom, gridCount: 4,
+        offset: { dx: 0, dy: -20 }, buttonDirection: DialogButtonDirection.VERTICAL,
+        buttons: [
+          { value: $r('app.string.cloud_backup_delete_confirm_title'), fontColor: $r('sys.color.ohos_id_color_warning'),
+            action: () => {
+              this.confirmationOpen = false;
+              if (this.selectionStillValid(record)) { this.triggerDelete(record); }
+            } },
+          { value: $r('app.string.dialog_btn_cancel'), action: () => { this.confirmationOpen = false; } }
+        ],
+        cancel: () => { this.confirmationOpen = false; }
+      });
+    } catch (_) {
+      this.confirmationOpen = false;
+      showSnackBar($r('app.string.cloud_backup_delete_failed'), SnackBarNotifyType.WARNING);
+    }
+  }
+
+  /** 聚合清理入口的二次确认：明确范围为"来源未确认"记录，本地令牌不受影响。 */
+  private showUnknownCleanupConfirmDialog(): void {
+    if (!this.canStartAction()) {
+      return;
+    }
+    const targets = this.getUnknownSourceRecords();
+    if (targets.length === 0) {
+      return;
+    }
+    this.confirmationOpen = true;
+    try {
+      this.getUIContext().showAlertDialog({
+        systemMaterial: dialogSystemMaterial(),
+        title: $r('app.string.cloud_backup_unknown_cleanup_entry'),
+        message: $r('app.string.cloud_backup_unknown_cleanup_confirm', targets.length),
+        autoCancel: true, alignment: DialogAlignment.Bottom, gridCount: 4,
+        offset: { dx: 0, dy: -20 }, buttonDirection: DialogButtonDirection.VERTICAL,
+        buttons: [
+          { value: $r('app.string.cloud_backup_unknown_cleanup_entry'), fontColor: $r('sys.color.ohos_id_color_warning'),
+            action: () => {
+              this.confirmationOpen = false;
+              this.triggerUnknownSourceCleanup(targets);
+            } },
+          { value: $r('app.string.dialog_btn_cancel'), action: () => { this.confirmationOpen = false; } }
+        ],
+        cancel: () => { this.confirmationOpen = false; }
+      });
+    } catch (_) {
+      this.confirmationOpen = false;
+      showSnackBar($r('app.string.cloud_backup_delete_failed'), SnackBarNotifyType.WARNING);
+    }
+  }
+
+  /** 本地删除与同步提交分别汇总；已删除项立即移除，失败项保留，同步重试不重删。 */
+  private async triggerUnknownSourceCleanup(targets: CloudBackupRecord[]): Promise<void> {
+    const context = CloudBackupDiagnostics.begin(DiagnosticKind.UI);
+    CloudBackupDiagnostics.mark(context, DiagnosticStage.UI_ACTION, DiagnosticResult.BEGIN,
+      { uiAction: DiagnosticUiAction.UNKNOWN_SOURCE_CLEANUP });
+    let deleted = 0;
+    let failed = 0;
+    let syncRejected = false;
+    let syncSubmitted = false;
+    try {
+      if (!this.canStartAction() || targets.length === 0) {
+        CloudBackupDiagnostics.mark(context, DiagnosticStage.UI_RESULT, DiagnosticResult.BLOCKED,
+          { uiAction: DiagnosticUiAction.UNKNOWN_SOURCE_CLEANUP, reason: DiagnosticReason.UNAVAILABLE });
+        return;
+      }
+      this.isActionRunning = true;
+      try {
+        for (const record of targets) {
+          const result = await this.backupManager.deleteBackupRecordResult(record.id);
+          if (!this.isMounted) {
+            CloudBackupDiagnostics.mark(context, DiagnosticStage.UI_RESULT, DiagnosticResult.CANCELLED,
+              { uiAction: DiagnosticUiAction.UNKNOWN_SOURCE_CLEANUP, reason: DiagnosticReason.CANCELLED });
+            return;
+          }
+          if (result.syncStartAccepted) {
+            syncSubmitted = true;
+            if (!syncRejected) { this.needsSyncRetry = false; }
+          } else if (result.localComplete || result.partialFailure || result.reason === CloudBackupFailureReason.SYNC_FAILED) {
+            syncRejected = true;
+            this.needsSyncRetry = true;
+          }
+          if (result.localComplete || result.success) {
+            deleted++;
+            // 后续删除或历史刷新失败不能让已删除记录继续可恢复。
+            this.backupRecords = this.backupRecords.filter((item: CloudBackupRecord) => item.id !== record.id);
+            if (this.selectedRecord?.id === record.id) {
+              this.selectedRecord = null;
+              this.isDetailVisible = false;
+            }
+          } else {
+            failed++;
+          }
+        }
+      } catch (_) {
+        // 未完成及尚未尝试的项目仍在列表中，不伪称已经删除。
+        failed = targets.length - deleted;
+      } finally {
+        this.isActionRunning = false;
+        this.refreshOperationState();
+      }
+      if (!this.isMounted) { return; }
+      this.actionMessage = syncRejected ?
+        $r('app.string.cloud_backup_unknown_cleanup_sync_failed', deleted, failed) : syncSubmitted ?
+          $r('app.string.cloud_backup_unknown_cleanup_sync_pending', deleted, failed) :
+          $r('app.string.cloud_backup_unknown_cleanup_done', deleted, failed);
+      showSnackBar(this.actionMessage, failed > 0 || syncRejected || syncSubmitted ?
+        SnackBarNotifyType.WARNING : SnackBarNotifyType.SUCCESS);
+      CloudBackupDiagnostics.mark(context, DiagnosticStage.UI_RESULT, failed > 0 || syncRejected ?
+        DiagnosticResult.FAIL : syncSubmitted ? DiagnosticResult.PENDING : DiagnosticResult.OK,
+        { uiAction: DiagnosticUiAction.UNKNOWN_SOURCE_CLEANUP,
+          reason: syncRejected ? DiagnosticReason.SYNC_REJECTED : failed > 0 ? DiagnosticReason.PARTIAL_FAILURE : DiagnosticReason.NONE,
+          partialFailure: failed > 0, syncStartAccepted: syncSubmitted && !syncRejected });
+      if (deleted > 0) {
+        await this.loadBackupHistory();
+        if (this.isMounted) {
+          CloudBackupDiagnostics.mark(context, DiagnosticStage.UI_REFRESH, this.historyError !== '' ?
+            DiagnosticResult.FAIL : this.serviceBusy || this.cleanupPending ? DiagnosticResult.PENDING : DiagnosticResult.OK,
+            { uiAction: DiagnosticUiAction.UNKNOWN_SOURCE_CLEANUP,
+              reason: this.historyError !== '' ? DiagnosticReason.UNAVAILABLE : DiagnosticReason.NONE });
+        }
+      }
+    } finally {
+      CloudBackupDiagnostics.end(context);
+    }
+  }
+
+  private async triggerRestore(record: CloudBackupRecord): Promise<void> {
+    if (!this.canStartAction() || !this.selectionStillValid(record) || !this.canRestore(record)) {
+      return;
+    }
+    this.isActionRunning = true;
+    try {
+      const result = await this.backupManager.restoreFromBackupRecordResult(record.id);
+      if (!this.isMounted) { return; }
+      this.actionMessage = result.success ? $r('app.string.cloud_backup_restore_success') :
+        this.actionFailureText(result, $r('app.string.cloud_backup_restore_failed'));
+      showSnackBar(this.actionMessage, result.success ? SnackBarNotifyType.SUCCESS : SnackBarNotifyType.WARNING);
+      if (result.success) {
+        this.isDetailVisible = false;
+      } else if (result.reason === CloudBackupFailureReason.FORMAT_INVALID) {
+        // 仅确定的格式/完整性失败禁用恢复；DECRYPT_FAILED 保留有效元数据及重试入口。
+        const invalidRecord: CloudBackupRecord = {
+          id: record.id, date: record.date, timestamp: record.timestamp, tokenCount: record.tokenCount,
+          size: record.size, encrypted: record.encrypted, deviceId: record.deviceId, deviceName: record.deviceName,
+          location: record.location, metadataStatus: CloudBackupMetadataStatus.INVALID,
+          identityStatus: record.identityStatus, tokenCountKnown: false
+        };
+        this.backupRecords = this.backupRecords.map((item: CloudBackupRecord) => item.id === record.id ? invalidRecord : item);
+        if (this.selectedRecord?.id === record.id) { this.selectedRecord = invalidRecord; }
+      }
+    } catch (_) {
+      if (this.isMounted) {
+        this.actionMessage = $r('app.string.cloud_backup_restore_failed');
+        showSnackBar(this.actionMessage, SnackBarNotifyType.WARNING);
+      }
+    } finally {
+      this.isActionRunning = false;
+      this.refreshOperationState();
+    }
+  }
+
+  private async triggerDelete(record: CloudBackupRecord): Promise<void> {
+    if (!this.canStartAction() || !this.selectionStillValid(record)) {
+      return;
+    }
+    this.isActionRunning = true;
+    let shouldRefresh = false;
+    try {
+      const result = await this.backupManager.deleteBackupRecordResult(record.id);
+      if (!this.isMounted) { return; }
+      if (result.syncStartAccepted) {
+        this.needsSyncRetry = false;
+      } else if (result.localComplete || result.partialFailure) {
+        this.needsSyncRetry = true;
+      }
+      this.actionMessage = result.success ? $r('app.string.cloud_backup_delete_success') :
+        this.actionFailureText(result, $r('app.string.cloud_backup_delete_failed'));
+      showSnackBar(this.actionMessage, result.success ? SnackBarNotifyType.SUCCESS : SnackBarNotifyType.WARNING);
+      if (result.localComplete || result.success) {
+        // 本地删除完成后不保留可恢复的过期记录；同步重试只提交同步，不重新执行删除。
+        this.backupRecords = this.backupRecords.filter((item: CloudBackupRecord) => item.id !== record.id);
+        this.selectedRecord = null;
+        this.isDetailVisible = false;
+        shouldRefresh = true;
+      }
+    } catch (_) {
+      if (this.isMounted) {
+        this.actionMessage = $r('app.string.cloud_backup_delete_failed');
+        showSnackBar(this.actionMessage, SnackBarNotifyType.WARNING);
+      }
+    } finally {
+      this.isActionRunning = false;
+      this.refreshOperationState();
+    }
+    if (shouldRefresh && this.isMounted) { await this.loadBackupHistory(); }
+  }
+
+  private async retryCleanup(): Promise<void> {
+    if (!this.isMounted || this.isLoading || this.isActionRunning || this.isRetryingCleanup || this.confirmationOpen) {
+      return;
+    }
+    this.isRetryingCleanup = true;
+    try {
+      const drained = await this.backupManager.retryPendingCleanup();
+      this.actionMessage = drained ? $r('app.string.cloud_backup_cleanup_ready') : $r('app.string.cloud_backup_cleanup_pending');
+    } catch (_) {
+      this.actionMessage = $r('app.string.cloud_backup_cleanup_pending');
+    } finally {
+      this.isRetryingCleanup = false;
+      this.refreshOperationState();
+    }
+    // 不自动重放原备份/恢复/删除；用户在确认安全结束后显式选择下一步。
+  }
+
+  private async retrySync(): Promise<void> {
+    if (!this.canStartAction() || !this.needsSyncRetry) { return; }
+    this.isActionRunning = true;
+    try {
+      const accepted = await this.backupManager.retrySync();
+      this.needsSyncRetry = !accepted;
+      this.actionMessage = accepted ? $r('app.string.cloud_backup_sync_pending') : $r('app.string.cloud_backup_sync_submit_failed');
+    } catch (_) {
+      this.actionMessage = $r('app.string.cloud_backup_sync_submit_failed');
+    } finally {
+      this.isActionRunning = false;
+      this.refreshOperationState();
+    }
+  }
+
+  private actionFailureText(result: CloudBackupActionResult, fallback: ResourceStr): ResourceStr {
+    if (result.reason === CloudBackupFailureReason.CLEANUP_PENDING || result.reason === CloudBackupFailureReason.BUSY) {
+      return this.failureText(result.reason, fallback);
+    }
+    if (result.partialFailure) { return $r('app.string.cloud_backup_partial_failure'); }
+    if (result.localComplete && !result.syncStartAccepted && result.reason === CloudBackupFailureReason.SYNC_FAILED) {
+      return $r('app.string.cloud_backup_local_done_sync_failed');
+    }
+    return this.failureText(result.reason, fallback);
+  }
+
+  private failureText(reason: CloudBackupFailureReason, fallback: ResourceStr): ResourceStr {
+    switch (reason) {
+      case CloudBackupFailureReason.NOT_READY: return $r('app.string.cloud_backup_not_ready');
+      case CloudBackupFailureReason.NOT_SIGNED_IN: return $r('app.string.cloud_backup_login_required');
+      case CloudBackupFailureReason.IDENTITY_UNAVAILABLE: return $r('app.string.cloud_backup_identity_unavailable');
+      case CloudBackupFailureReason.BUSY: return $r('app.string.cloud_backup_operation_busy');
+      case CloudBackupFailureReason.CLEANUP_PENDING: return $r('app.string.cloud_backup_cleanup_pending');
+      case CloudBackupFailureReason.INVALID_TARGET: return $r('app.string.cloud_backup_invalid_target');
+      case CloudBackupFailureReason.READ_FAILED: return $r('app.string.cloud_backup_read_failed');
+      case CloudBackupFailureReason.WRITE_FAILED: return $r('app.string.cloud_backup_write_failed');
+      case CloudBackupFailureReason.FORMAT_INVALID: return $r('app.string.cloud_backup_metadata_invalid');
+      case CloudBackupFailureReason.DECRYPT_FAILED: return $r('app.string.cloud_backup_decrypt_failed');
+      case CloudBackupFailureReason.DELETE_FAILED: return $r('app.string.cloud_backup_delete_failed');
+      case CloudBackupFailureReason.ICON_FAILED: return $r('app.string.cloud_backup_icon_failed');
+      case CloudBackupFailureReason.SYNC_FAILED: return $r('app.string.cloud_backup_sync_submit_failed');
+      default: return fallback;
     }
   }
 }

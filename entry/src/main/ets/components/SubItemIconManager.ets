@@ -7,12 +7,24 @@ import { BusinessError, zlib } from '@kit.BasicServicesKit';
 import { AppStorageV2 } from '@kit.ArkUI';
 import { SubItemDivider } from './SubItemDivider';
 import { AppPreference, BUILTIN_DEFAULT_PACK_ID, PREF_KEYS } from 'common';
+import {
+  IconPackGateRejectError, IconPackImportMutex, IconPackZipGateLimits, IconPackZipGateReject,
+  InstalledPackInfo, IconPackZipEntryInfo, ZipRawEntryInfo, gateZipTotalSize, gateZipRawEntries,
+  gateZipCentralIndex, gateExtractedPackEntries, collectIconPackDirEntries, removeIconPackDirBestEffort,
+  mapGetOriginalSizeError, iconPackGateRejectText
+} from 'common';
+import { IconPackImportDiag } from '../utils/IconPackImportDiag';
+import type { ZipIndex } from './IconPackZipReader';
 import { AppWindowInfo } from 'common';
 import { throttle, startBrowsableAbility } from 'common';
 import { showSnackBar, SnackBarNotifyType } from 'common';
 import { TokenStore } from 'common';
-import { hilog } from '@kit.PerformanceAnalysisKit';
 import { SETTING_ROW_MIN_HEIGHT, SETTING_ROW_PADDING, SETTING_ROW_ICON_OFFSET } from './SettingStyle';
+
+/** lazy import 的 reader 模块形状（显式接口，避免动态 import 落入 any/unknown）。 */
+interface ZipReaderModule {
+  readZipIndex(bytes: ArrayBuffer): Promise<ZipIndex>;
+}
 
 interface PackItem {
   id: string;
@@ -133,7 +145,154 @@ export struct SubItemIconManager {
     return true;
   }
 
+  private installedPackInfos(): InstalledPackInfo[] {
+    const infos: InstalledPackInfo[] = [];
+    for (const pack of TokenIconPacks.aegis_icon_packs) {
+      if (!pack.invalid) {
+        const info: InstalledPackInfo = { name: pack.name, version: String(pack.version ?? 0) };
+        infos.push(info);
+      }
+    }
+    return infos;
+  }
+
+  /** lazy import 的 reader 模块形状（显式类型，避免动态 import 落入 any）。 */
+  private async loadZipReader(): Promise<ZipReaderModule> {
+    return await import('./IconPackZipReader');
+  }
+
+  /**
+   * 导入选中的图标包 zip：进程内互斥（多点击/多面板共享一把锁，忙碌即拒）→ 解压前四段门控
+   * （getOriginalSize 拦格式/总体积 → 原始中央目录拦原始路径逃逸（目录条目也在内）→ jszip 归一化
+   * 中央目录拦 pack.json/限额/同名同版本重复 → 均零写入；解压后落盘复扫作纵深防御），任何拒绝都
+   * 整目录回收——不产生 invalid 条目或解压残留。jszip 读取经 lazy import（冷启动不加载重依赖）。
+   * 日志只经 IconPackImportDiag 白名单枚举/数字；未知错误 UI 用固定 IO_ERROR 文案，不透传异常文本。
+   */
+  private async importIconPackFile(fd: fs.File): Promise<void> {
+    if (!IconPackImportMutex.tryAcquire()) {
+      showSnackBar($r('app.string.cloud_backup_operation_busy'), SnackBarNotifyType.ERROR);
+      try {
+        fs.closeSync(fd.fd);
+      } catch (_) {
+        // 描述符关闭失败不影响结果；忙碌路径未做任何文件修改。
+      }
+      return;
+    }
+    const segments = fd.path.split('/');
+    const outPath = this.icon_pack_dir + '/' + segments[segments.length - 1];
+    // 只有本操作成功建出的目录才由本操作回收：mkdir 失败说明目录已存在（并发同名导入的
+    // 胜者或遗留目录），绝不能代删——否则会破坏他人正在进行的解压。
+    let createdDir = false;
+    const diag = IconPackImportDiag.begin();
+    try {
+      // 压缩体积上限：JSZip 门控需整文件读入内存，先按 stat 拦截保护。
+      const compressed = await fs.stat(fd.path);
+      if (compressed.size > IconPackZipGateLimits.MAX_COMPRESSED_BYTES) {
+        throw new IconPackGateRejectError(IconPackZipGateReject.TOO_LARGE_TOTAL);
+      }
+      // 解压前·格式与未压缩总体积（损坏/非 ZIP 时 getOriginalSize 抛 900003）。
+      let totalBytes = -1;
+      try {
+        totalBytes = await zlib.getOriginalSize(fd.path);
+      } catch (error) {
+        throw new IconPackGateRejectError(mapGetOriginalSizeError(error as BusinessError));
+      }
+      const sizeVerdict = gateZipTotalSize(totalBytes);
+      if (!sizeVerdict.ok) {
+        throw new IconPackGateRejectError(sizeVerdict.reject);
+      }
+      // 整文件读入内存（JSZip 需要完整字节；短读如实失败）。
+      const bytes = new ArrayBuffer(compressed.size);
+      let readTotal = 0;
+      const chunk = new ArrayBuffer(256 * 1024);
+      while (readTotal < compressed.size) {
+        const want = Math.min(256 * 1024, compressed.size - readTotal);
+        const read = fs.readSync(fd.fd, chunk, { offset: readTotal, length: want });
+        if (read <= 0) {
+          break;
+        }
+        new Uint8Array(bytes, readTotal, read).set(new Uint8Array(chunk, 0, read));
+        readTotal += read;
+      }
+      if (readTotal < compressed.size) {
+        throw new IconPackGateRejectError(IconPackZipGateReject.IO_ERROR);
+      }
+      // 解压前·原始中央目录 + 归一化中央目录门（零写入）：原始路径逃逸（文件与目录条目都在内）、
+      // pack.json 存在并可解析、文件数/单文件/总体积限额、同名同版本重复导入拒绝。
+      // pack.json 内容为流式真实字节硬限读取（谎报声明在展开途中截停，不全量展开后拒）。
+      // lazy import：jszip 与解析器只在首次导入时加载，不进冷启动路径。
+      const reader = await this.loadZipReader();
+      let index: ZipIndex;
+      try {
+        index = await reader.readZipIndex(bytes);
+      } catch (error) {
+        // 只读固定 error.name（reader 以固定 token 命名错误），不读异常文本。
+        throw new IconPackGateRejectError((error as Error).name === 'ICON_PACK_META_TOO_LARGE'
+          ? IconPackZipGateReject.FILE_TOO_LARGE : IconPackZipGateReject.NOT_ZIP_OR_DAMAGED);
+      }
+      const rawEntries: ZipRawEntryInfo[] = [];
+      for (const raw of index.rawEntries) {
+        const mappedRaw: ZipRawEntryInfo = {
+          rawName: raw.rawName, sizeBytes: raw.sizeBytes, isDirectory: raw.isDirectory
+        };
+        rawEntries.push(mappedRaw);
+      }
+      const rawVerdict = gateZipRawEntries(rawEntries);
+      if (!rawVerdict.ok) {
+        throw new IconPackGateRejectError(rawVerdict.reject);
+      }
+      const centralEntries: IconPackZipEntryInfo[] = [];
+      for (const item of index.entries) {
+        const mapped: IconPackZipEntryInfo = {
+          relativePath: item.relativePath, sizeBytes: item.sizeBytes, isDirectory: item.isDirectory
+        };
+        centralEntries.push(mapped);
+      }
+      const centralVerdict = gateZipCentralIndex(centralEntries, index.packJsonContent, this.installedPackInfos());
+      if (!centralVerdict.ok) {
+        throw new IconPackGateRejectError(centralVerdict.reject);
+      }
+      await fs.mkdir(outPath);
+      createdDir = true;
+      await zlib.decompressFile(fd.path, outPath);
+      const entries = await collectIconPackDirEntries(outPath);
+      const verdict = gateExtractedPackEntries(entries);
+      if (!verdict.ok) {
+        throw new IconPackGateRejectError(verdict.reject);
+      }
+      await TokenIconPacks.addAegisIconPack(outPath);
+      diag.succeeded();
+      this.syncFromTokenIconPacks();
+      TokenIconPacks.notifyChanged();
+    } catch (err) {
+      if (err instanceof IconPackGateRejectError) {
+        diag.gateRejected(err.reason);
+        showSnackBar(iconPackGateRejectText(err.reason), SnackBarNotifyType.ERROR);
+      } else {
+        diag.failed(err);
+        showSnackBar(iconPackGateRejectText(IconPackZipGateReject.IO_ERROR), SnackBarNotifyType.ERROR);
+      }
+      if (createdDir) {
+        try {
+          await removeIconPackDirBestEffort(outPath);
+        } catch (cleanupError) {
+          // 清理失败准确可见：白名单数字码 + 固定 PARTIAL_FAILURE，不输出路径或异常文本。
+          diag.cleanupFailed(cleanupError);
+        }
+      }
+    } finally {
+      IconPackImportMutex.release();
+      diag.end();
+      try {
+        fs.closeSync(fd.fd);
+      } catch (_) {
+        // 描述符关闭失败不影响导入结果；原 fd 语义与既有实现一致。
+      }
+    }
+  }
+
   private async rematchAndShowProgress(): Promise<void> {
+    const diag = IconPackImportDiag.begin();
     try {
       const tkStore = TokenStore.getInstance();
       const allTokens = await tkStore.getTokens();
@@ -148,15 +307,16 @@ export struct SubItemIconManager {
         try {
           await tkStore.updateToken(changed[i]);
         } catch (e) {
-          hilog.error(0, 'SubItemIconManager', 'rematch token failed: ' + JSON.stringify(e));
+          diag.rematchFailed(e);
         }
         this.rematchCurrent = i + 1;
         this.rematchProgress = Math.round((i + 1) / changed.length * 100);
       }
     } catch (err) {
-      hilog.error(0, 'SubItemIconManager', 'rematchAndShowProgress failed: ' + JSON.stringify(err));
-      showSnackBar('重新匹配图标失败', SnackBarNotifyType.ERROR);
+      diag.rematchFailed(err);
+      showSnackBar($r('app.string.icon_pack_rematch_failed'), SnackBarNotifyType.ERROR);
     } finally {
+      diag.end();
       setTimeout(() => {
         this.rematchProgress = -1;
         this.rematchTotal = 0;
@@ -405,28 +565,10 @@ export struct SubItemIconManager {
                 showSelectFilePicker(5, ["ZIP File|.zip"]).then((paths) => {
                   paths.forEach((path) => {
                     fs.open(path).then((fd) => {
-                      const path_arr = fd.path.split('/');
-                      const file_name = path_arr[path_arr.length - 1];
-                      const out_path = this.icon_pack_dir + "/" + file_name;
-                      fs.mkdir(out_path).then(() => {
-                        zlib.decompressFile(fd.path, out_path).then(() => {
-                          return TokenIconPacks.addAegisIconPack(out_path);
-                        }).then(() => {
-                          this.syncFromTokenIconPacks();
-                          TokenIconPacks.notifyChanged();
-                        }).catch((err: BusinessError) => {
-                          hilog.error(0, 'SubItemIconManager', 'Failed to add icon pack: ' + JSON.stringify(err));
-                          showSnackBar(err.message ?? `${err}`, SnackBarNotifyType.ERROR);
-                          fs.rmdir(out_path).catch(() => {});
-                        }).finally(() => {
-                          fs.close(fd.fd).catch(() => {});
-                        });
-                      }).catch((err: BusinessError) => {
-                        showSnackBar(err.message ?? `${err}`, SnackBarNotifyType.ERROR);
-                        fs.close(fd.fd).catch(() => {});
-                      });
-                    }).catch((err: BusinessError) => {
-                      showSnackBar(err.message ?? `${err}`, SnackBarNotifyType.ERROR);
+                      return this.importIconPackFile(fd);
+                    }).catch(() => {
+                      // 打开失败不透传异常文本；固定 IO_ERROR 文案。
+                      showSnackBar(iconPackGateRejectText(IconPackZipGateReject.IO_ERROR), SnackBarNotifyType.ERROR);
                     });
                   });
                 });

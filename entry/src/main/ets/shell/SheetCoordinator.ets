@@ -43,6 +43,8 @@ export struct SheetCoordinator {
   @Require @Param pageInfos: NavPathStack = new NavPathStack();
   @Param selectedRoute: ROUTE_NAMES = ROUTE_NAMES.SettingAbout;
   @Param detailOnlyRoute: string = '';
+  @Param localBackupHostActive: boolean = true;
+  @Event onLocalExecutionChange: (executing: boolean) => void = () => {};
   @Event onSelectRoute: (route: ROUTE_NAMES) => void = () => {};
   /** 备份恢复完成回调(由 Index 提供:批量更新 Token 并重新排序) */
   @Require @Param backupReload: TokenImportHandler = async () => {};
@@ -53,6 +55,7 @@ export struct SheetCoordinator {
 
   @Local isBackupSheetVisible: boolean = false;
   @Local isUriImportPageVisible: boolean = false;
+  @Local isLocalBackupExecuting: boolean = false;
   @Local isSafetySheetVisible: boolean = false;
   @Local isAppearanceSheetVisible: boolean = false;
   @Local isDeveloperOptionsSheetVisible: boolean = false;
@@ -191,7 +194,20 @@ export struct SheetCoordinator {
 
   private backupSheetOptions(): SheetOptions {
     const options = MaterialSheetStyle.options();
-    options.showClose = !this.isUriImportPageVisible;
+    // 原生材质无效果时保留实体背板；材质有效时由系统处理底色。
+    options.backgroundColor = $r('app.color.window_background');
+    options.showClose = !this.isUriImportPageVisible && !this.isLocalBackupExecuting;
+    options.onWillDismiss = (action: DismissSheetAction): void => {
+      if (this.isLocalBackupExecuting) {
+        showSnackBar($r('app.string.local_backup_processing'), SnackBarNotifyType.INFO);
+      } else if (!this.isUriImportPageVisible) {
+        action.dismiss();
+      }
+    };
+    options.onWillSpringBackWhenDismiss = (action: SpringBackAction): void => {
+      if (this.isLocalBackupExecuting || this.isUriImportPageVisible) { action.springBack(); }
+    };
+    options.keyboardAvoidMode = SheetKeyboardAvoidMode.TRANSLATE_AND_SCROLL;
     return options;
   }
 
@@ -201,8 +217,13 @@ export struct SheetCoordinator {
       Tokens: this.tokens,
       scrollEffectStyle: this.scrollEffectType,
       embedded: embedded,
+      hostActive: this.localBackupHostActive,
       backupReload: this.backupReload,
-      onUriImportVisibilityChange: (visible: boolean) => this.isUriImportPageVisible = visible
+      onUriImportVisibilityChange: (visible: boolean) => this.isUriImportPageVisible = visible,
+      onLocalExecutionChange: (executing: boolean) => {
+        this.isLocalBackupExecuting = executing;
+        this.onLocalExecutionChange(executing);
+      }
     })
       .height('100%')
       .foregroundBlurStyle(this.window.BackgroundBlurActive ? BlurStyle.Thin : BlurStyle.NONE, {
