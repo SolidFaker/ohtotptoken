@@ -5,6 +5,7 @@ import { AppWindowInfo, MaterialPreference, otpType, ROUTE_NAMES, TokenConfig } 
 import { BackupAndMigrationSheet } from '../../../main/ets/pages/setting/BackupAndMigrationSheet';
 import { MaterialSheetStyle } from '../../../main/ets/components/MaterialSheetStyle';
 import { CloudBackupDetailsSheet, cloudBackupDetailsSheetOptions } from '../../../main/ets/pages/setting/CloudBackupDetailsSheet';
+import lazy { CloudBackupHistorySheet, cloudBackupHistorySheetOptions } from '../../../main/ets/pages/setting/CloudBackupHistorySheet';
 
 function syntheticTokens(): TokenConfig[] {
   const token = new TokenConfig('JBSWY3DPEHPK3PXP', otpType.TOTP, 'OHOTP Synthetic', 'Device test only');
@@ -17,6 +18,7 @@ function syntheticTokens(): TokenConfig[] {
 struct LocalBackupTestPage {
   @Local visible: boolean = false;
   @Local cloudVisible: boolean = false;
+  @Local historyVisible: boolean = false;
   @Local embedded: boolean = false;
   @Local dark: boolean = false;
   @Local largeFont: boolean = false;
@@ -59,21 +61,21 @@ struct LocalBackupTestPage {
     })
   }
 
-  private openHistoryInSheet(): void {
-    this.cloudVisible = true;
+  /** 历史已改为独立 bindSheet（CloudBackupHistorySheet）；本按钮直接挂载该面板并校验其栈根。 */
+  private openHistorySheet(): void {
+    this.historyVisible = true;
     this.navigationStatus = 'waiting';
     setTimeout(() => {
-      if (!this.cloudVisible) { return; }
+      if (!this.historyVisible) { return; }
       const ui = this.getUIContext();
-      const node = ui.getFrameNodeById('cloud-backup-details-sheet');
+      const node = ui.getFrameNodeById('cloud-backup-history-sheet');
       const navigation = node === null ? undefined : ui.getNavigationInfoByUniqueId(node.getUniqueId());
-      if (navigation === undefined || navigation.pathStack.getAllPathName().length !== 1 ||
-        navigation.pathStack.getAllPathName()[0] !== ROUTE_NAMES.ShowCloudSyncDetailsPage) {
-        this.navigationStatus = 'stack unavailable';
+      const paths = navigation?.pathStack.getAllPathName() ?? [];
+      if (paths.length !== 1 || paths[0] !== ROUTE_NAMES.ShowCloudBackupHistoryPage) {
+        this.navigationStatus = 'history stack unavailable';
         return;
       }
-      navigation.pathStack.pushPathByName(ROUTE_NAMES.ShowCloudBackupHistoryPage, null, false);
-      this.navigationStatus = 'history pushed';
+      this.navigationStatus = 'history sheet ok';
     }, 1000);
   }
 
@@ -82,6 +84,14 @@ struct LocalBackupTestPage {
     CloudBackupDetailsSheet({
       scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
       onClose: () => { this.cloudVisible = false; }
+    })
+  }
+
+  @Builder
+  HistoryContent() {
+    CloudBackupHistorySheet({
+      scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+      onClose: () => { this.historyVisible = false; }
     })
   }
 
@@ -96,7 +106,7 @@ struct LocalBackupTestPage {
       }
       Row({ space: 8 }) {
         Button('Cloud detail').id('ohotp-test-cloud').onClick(() => { this.cloudVisible = true; })
-        Button('History').id('ohotp-test-history').onClick(() => { this.openHistoryInSheet(); })
+        Button('History').id('ohotp-test-history').onClick(() => { this.openHistorySheet(); })
         Button('Rotate').id('ohotp-test-rotate').onClick(() => {
           this.landscape = !this.landscape;
           this.info.WindowClass?.setPreferredOrientation(this.landscape ? window.Orientation.LANDSCAPE : window.Orientation.PORTRAIT);
@@ -133,5 +143,6 @@ struct LocalBackupTestPage {
     .backgroundColor($r('app.color.window_background'))
     .bindSheet($$this.visible, this.Content(false), this.options())
     .bindSheet($$this.cloudVisible, this.CloudContent(), cloudBackupDetailsSheetOptions())
+    .bindSheet($$this.historyVisible, this.HistoryContent(), cloudBackupHistorySheetOptions())
   }
 }

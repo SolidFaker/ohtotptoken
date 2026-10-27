@@ -83,10 +83,10 @@ export struct SubItemEnumSelect {
         Select(this.options.map((option: EnumSelectOption) => {
           return { value: option.label as string } as SelectOption;
         }))
+          // 触发器不挂沉浸材质（内容区非官方允许生效区域）；下拉菜单保持材质。
           .enabled(!this.disable)
           .value(this.options.find((opt: EnumSelectOption) => opt.value === this.selected)?.label as string ?? '')
           .selected(this.options.findIndex((opt: EnumSelectOption) => opt.value === this.selected))
-          .systemMaterial(MaterialTheme.systemMaterial(true))
           .menuSystemMaterial(MaterialTheme.systemMaterial())
           .onSelect((index: number) => {
             const selectedValue = this.options[index]?.value;

@@ -8,13 +8,17 @@ import {
   CloudSyncFailureStage, CloudSyncFailureState, CloudSyncFailureView, cloudSyncFailureView,
   CommonConstants, DiagnosticKind, DiagnosticReason, DiagnosticResult, DiagnosticStage, DiagnosticUiAction,
   dialogSystemMaterial, HuaweiAccountManager, IconPackCloudBackup, IconPackSyncState,
-  PREF_KEYS, ROUTE_NAMES, showSnackBar, SnackBarNotifyType, SyncTimeHelper
+  PREF_KEYS, showSnackBar, SnackBarNotifyType, SyncTimeHelper
 } from 'common';
 import { MaterialTheme } from '../components/MaterialTheme';
+import { MaterialSheetStyle } from '../components/MaterialSheetStyle';
 import { PageScaffold } from '../components/PageScaffold';
 import { SettingItem } from '../components/SettingItem';
 import { SubItemButton } from '../components/SubItemButton';
 import { SubItemDivider } from '../components/SubItemDivider';
+// [冷启动优化] 历史面板与反馈内容仅在首次打开对应面板时加载
+import lazy { CloudBackupHistorySheet, cloudBackupHistorySheetOptions } from './setting/CloudBackupHistorySheet';
+import lazy { FeedbackSheet } from './setting/FeedbackSheet';
 
 enum ClearCloudType {
   DEVICE,
@@ -26,7 +30,6 @@ enum ClearCloudType {
 @Preview
 @ComponentV2
 export struct ShowCloudSyncDetailsPage {
-  pageInfos: NavPathStack | null = null;
   @Require @Param scrollEffectType: ScrollEffectType = ScrollEffectType.IMMERSIVE_GRADIENT_BLUR;
   @Param inMaterialSheet: boolean = false;
   @Param sheetRoot: boolean = false;
@@ -46,6 +49,8 @@ export struct ShowCloudSyncDetailsPage {
   @Local isRetryingCleanup: boolean = false;
   @Local needsSyncRetry: boolean = false;
   @Local confirmationOpen: boolean = false;
+  @Local isHistorySheetVisible: boolean = false;
+  @Local isFeedbackSheetVisible: boolean = false;
   @Local iconPackStatusKnown: boolean = false;
   @Local iconPackMetaAbsent: boolean = false;
   @Local iconPackPublicationUnresolved: boolean = false;
@@ -204,6 +209,29 @@ export struct ShowCloudSyncDetailsPage {
       $r('app.color.window_background');
   }
 
+  private historySheetOptions(): SheetOptions {
+    return cloudBackupHistorySheetOptions();
+  }
+
+  private feedbackSheetOptions(): SheetOptions {
+    return MaterialSheetStyle.options();
+  }
+
+  @Builder
+  HistorySheetContent() {
+    CloudBackupHistorySheet({
+      scrollEffectType: this.scrollEffectType,
+      onClose: () => { this.isHistorySheetVisible = false; }
+    })
+  }
+
+  @Builder
+  FeedbackSheetContent() {
+    // embedded:false 与设置页反馈 sheet（SheetCoordinator）同一呈现配置。
+    FeedbackSheet({ scrollEffectType: this.scrollEffectType, embedded: false })
+      .height('100%')
+  }
+
   build() {
     HdsNavDestination() {
       PageScaffold({ bgColor: this.pageBackground() }) {
@@ -357,9 +385,10 @@ export struct ShowCloudSyncDetailsPage {
                 symbol: $r('sys.symbol.arrow_counterclockwise_clock'), text: $r('app.string.cloud_backup_history_title'),
                 description: $r('app.string.cloud_backup_history_subtitle'), descriptionMaxLines: 0
               })
+                .id('cloud-backup-history-open')
                 .enabled(!this.interactionBlocked() && this.isHuaweiLoggedIn)
                 .onClick(() => {
-                  if (this.canStartAction()) { this.pageInfos?.pushPathByName(ROUTE_NAMES.ShowCloudBackupHistoryPage, null); }
+                  if (this.canStartAction()) { this.isHistorySheetVisible = true; }
                 })
               SubItemDivider()
               SubItemButton({ symbol: $r('sys.symbol.gearshape'), text: $r('app.string.cloud_sync_open_cloud_space') })
@@ -385,6 +414,7 @@ export struct ShowCloudSyncDetailsPage {
         .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true }).scrollBar(BarState.Off)
         .backgroundColor(this.pageBackground()).width('100%').height('100%')
         .padding({ left: 16, right: 16 }).contentEndOffset(this.window.AvoidBottomHeight + 24)
+        .bindSheet($$this.isFeedbackSheetVisible, this.FeedbackSheetContent(), this.feedbackSheetOptions())
       }
     }
     .backgroundColor(this.pageBackground())
@@ -395,6 +425,7 @@ export struct ShowCloudSyncDetailsPage {
       this.onCloseSheet();
       return true;
     })
+    .bindSheet($$this.isHistorySheetVisible, this.HistorySheetContent(), this.historySheetOptions())
     .titleMode(HdsNavDestinationTitleMode.MODAL)
     .titleBar({
       style: {
@@ -410,7 +441,6 @@ export struct ShowCloudSyncDetailsPage {
       },
       content: { title: { mainTitle: $r('app.string.data_huawei_cloud_sync_details') } }
     })
-    .onReady((context: NavDestinationContext) => { this.pageInfos = context.pathStack; })
   }
 
   @Builder
@@ -479,12 +509,12 @@ export struct ShowCloudSyncDetailsPage {
     CloudBackupDiagnostics.mark(context, DiagnosticStage.UI_ACTION, DiagnosticResult.BEGIN,
       { uiAction: DiagnosticUiAction.FEEDBACK });
     try {
-      if (!this.isMounted || this.interactionBlocked() || this.lastFailure === null || this.pageInfos === null) {
+      if (!this.isMounted || this.interactionBlocked() || this.lastFailure === null) {
         CloudBackupDiagnostics.mark(context, DiagnosticStage.UI_RESULT, DiagnosticResult.BLOCKED,
           { uiAction: DiagnosticUiAction.FEEDBACK, reason: DiagnosticReason.UNAVAILABLE });
         return;
       }
-      this.pageInfos.pushPathByName(ROUTE_NAMES.SettingFeedback, null);
+      this.isFeedbackSheetVisible = true;
       CloudBackupDiagnostics.mark(context, DiagnosticStage.UI_RESULT, DiagnosticResult.OK,
         { uiAction: DiagnosticUiAction.FEEDBACK, reason: DiagnosticReason.NONE });
     } catch (_) {

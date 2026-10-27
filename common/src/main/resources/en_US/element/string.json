@@ -870,8 +870,12 @@
       "value": "Restore the backup from %s? Tokens will be imported into local storage; matching tokens may be updated."
     },
     {
-      "name": "cloud_backup_restore_success",
-      "value": "Backup restored successfully"
+      "name": "cloud_backup_restore_empty_msg",
+      "value": "This backup contains no tokens. Restoring will not add any tokens, and your local tokens will not be deleted. Continue?"
+    },
+    {
+      "name": "cloud_backup_restore_success_count",
+      "value": "Restored %d tokens from the cloud"
     },
     {
       "name": "cloud_backup_restore_failed",

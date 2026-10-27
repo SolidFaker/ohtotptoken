@@ -400,6 +400,10 @@ export class TokenIconPacks {
     const builtInPrefix = 'rawfile://icons/';
     if (path.startsWith(builtInPrefix) && path.toLowerCase().endsWith('.svg')) {
       const fileName = path.slice(builtInPrefix.length, -4);
+      // cadence 仅提供 SVG 原图，没有对应的内置 PNG 缩略图。
+      if (fileName === 'token_image_cadence') {
+        return path;
+      }
       return `rawfile://icon_thumbnails/${fileName}.png`;
     }
     return TokenIconPacks.pickerPreviewPathBySource.get(path) ?? path;

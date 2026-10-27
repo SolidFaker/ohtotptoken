@@ -1,5 +1,4 @@
 import { SETTING_ROW_MIN_HEIGHT, SETTING_ROW_PADDING, SETTING_ROW_ICON_OFFSET } from './SettingStyle';
-import { MaterialTheme } from './MaterialTheme';
 
 @Preview
 @ComponentV2
@@ -51,6 +50,7 @@ export struct SubItemToggle {
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
 
+        // 不挂沉浸材质：内容区控件不在官方允许生效区域，材质白底+白色点光源会遮挡开关配色（暗色尤甚）。
         Toggle({ type: ToggleType.Switch, isOn: this.isOn })
           .id('ToggleSwitch')
           .width(36)
@@ -61,7 +61,6 @@ export struct SubItemToggle {
             this.onChange(isOn);
           })
           .enabled(!this.disable)
-          .systemMaterial(MaterialTheme.systemMaterial(true))
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)

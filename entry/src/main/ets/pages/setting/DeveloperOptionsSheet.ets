@@ -137,7 +137,6 @@ export struct DeveloperOptionsSheet {
                   .layoutWeight(1)
                 Toggle({ type: ToggleType.Switch, isOn: this.cloudDiagnosticsEnabled })
                   .responseRegion({ x: -6, y: -14, width: 48, height: 48 })
-                  .systemMaterial(MaterialTheme.systemMaterial(true))
                   .onChange((isOn: boolean) => this.changeCloudDiagnostics(isOn))
               }
               .width('100%').padding(16).constraintSize({ minHeight: 56 })

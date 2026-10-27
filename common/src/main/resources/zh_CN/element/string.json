@@ -896,8 +896,12 @@
       "value": "确定恢复 %s 的备份？令牌将导入本地存储，已有的匹配令牌可能被更新。"
     },
     {
-      "name": "cloud_backup_restore_success",
-      "value": "备份恢复成功"
+      "name": "cloud_backup_restore_empty_msg",
+      "value": "该备份不包含任何令牌，恢复后不会新增令牌，本地令牌不会被删除。确定要继续吗？"
+    },
+    {
+      "name": "cloud_backup_restore_success_count",
+      "value": "已从云端恢复 %d 个令牌"
     },
     {
       "name": "cloud_backup_restore_failed",

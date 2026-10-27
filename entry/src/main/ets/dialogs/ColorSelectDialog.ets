@@ -1,4 +1,3 @@
-import { MaterialTheme } from '../components/MaterialTheme';
 import { AppPreference, PREF_KEYS } from 'common';
 import { colorHex, hexColor, mixRgba, scaleRgba, setRgba } from 'common';
 
@@ -125,7 +124,6 @@ export struct ColorSelectDialog {
         min: 0,
         max: 100,
       })
-        .systemMaterial(MaterialTheme.systemMaterial(true))
         .onChange((value: number, mode: SliderChangeMode) => {
           this.picked_color = getBlockColor(value);
           this.update_canvas();

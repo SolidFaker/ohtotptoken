@@ -109,12 +109,24 @@ test('cloud details uses a bottom sheet with an isolated history stack and root 
   assert.match(sheet, /pushPathByName\(ROUTE_NAMES.ShowCloudSyncDetailsPage, null, false\)/);
   assert.match(sheet, /hideNavBar\(true\)/);
   assert.match(sheet, /sheetRoot: true/);
-  assert.match(sheet, /ShowCloudBackupHistoryPage\(\{ scrollEffectType: this.scrollEffectType, inMaterialSheet: true \}\)/);
-  assert.match(sheet, /this.pageInfos.clear\(\)/);
+  // 历史与反馈已迁出详情面板私有栈：面板只承载首屏，不允许侧滑 push 回归。
+  assert.doesNotMatch(sheet, /ShowCloudBackupHistoryPage|backFromFeedback|SettingFeedback/);
+  assert.match(sheet, /this\.pageInfos\.clear\(\)/);
+  const historySheet = load(entry + 'pages/setting/CloudBackupHistorySheet.ets');
+  assert.match(historySheet, /MaterialSheetStyle.options\(\)/);
+  assert.match(historySheet, /private pageInfos: NavPathStack = new NavPathStack\(\)/);
+  assert.match(historySheet, /pushPathByName\(ROUTE_NAMES.ShowCloudBackupHistoryPage, null, false\)/);
+  assert.match(historySheet, /hideNavBar\(true\)/);
+  assert.match(historySheet, /sheetRoot: true/);
+  assert.match(historySheet, /inMaterialSheet: true/);
+  assert.match(historySheet, /this\.pageInfos\.clear\(\)/);
   const detail = load(entry + 'pages/ShowCloudSyncDetailsPage.ets');
   assert.match(detail, /@Param sheetRoot: boolean = false/);
-  assert.match(detail, /if \(!this.sheetRoot\) \{ return false; \}\s*this.onCloseSheet\(\);\s*return true;/);
-  assert.match(detail, /pushPathByName\(ROUTE_NAMES.ShowCloudBackupHistoryPage, null\)/);
+  assert.match(detail, /if \(!this\.sheetRoot\) \{ return false; \}\s*this\.onCloseSheet\(\);\s*return true;/);
+  // 历史与反馈一律 bindSheet 向上弹出；侧滑 push 是沉浸光感残留的触发条件，禁止回归。
+  assert.doesNotMatch(detail, /pushPathByName/);
+  assert.match(detail, /isHistorySheetVisible = true/);
+  assert.match(detail, /isFeedbackSheetVisible = true/);
   assert.match(load(entry + 'components/MaterialSheetStyle.ets'), /preferType: SheetType.BOTTOM/);
 });
 

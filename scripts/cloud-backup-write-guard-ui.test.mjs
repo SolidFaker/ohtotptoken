@@ -12,6 +12,7 @@ const pages = 'entry/src/main/ets/pages/';
 const history = load(pages + 'ShowCloudBackupHistoryPage.ets');
 const details = load(pages + 'ShowCloudSyncDetailsPage.ets');
 const sheet = load(pages + 'setting/CloudBackupDetailsSheet.ets');
+const historyPanel = load(pages + 'setting/CloudBackupHistorySheet.ets');
 const feedback = load(pages + 'setting/FeedbackSheet.ets');
 const web = load(pages + 'WebPage.ets');
 const SENTINEL = 'SYNTHETIC_PRIVATE_DATA';
@@ -76,7 +77,8 @@ const production = [
     'loadBackupHistory', 'triggerUnknownSourceCleanup', 'retrySync', 'isEnumerated', 'canRestore',
     'selectionStillValid', 'actionFailureText', 'failureText', 'triggerDelete']),
   fixtureClass('DetailsFixture', details, ['interactionBlocked', 'openFeedback', 'failureText', 'lastFailureReasonText']),
-  fixtureClass('SheetFixture', sheet, ['aboutToAppear', 'aboutToDisappear', 'backFromFeedback', 'Destination'], true),
+  fixtureClass('SheetFixture', sheet, ['aboutToAppear', 'aboutToDisappear', 'Destination'], true),
+  fixtureClass('HistoryPanelFixture', historyPanel, ['aboutToAppear', 'aboutToDisappear', 'Destination'], true),
   fixtureClass('FeedbackFixture', feedback, ['navDestinationBuilder']),
 ].join('\n');
 
@@ -97,7 +99,7 @@ function environment(detailed = true) {
     children();
     return attributes(event);
   };
-  const api = runInNewContext(production + `\n({ HistoryFixture, DetailsFixture, SheetFixture, FeedbackFixture,
+  const api = runInNewContext(production + `\n({ HistoryFixture, DetailsFixture, SheetFixture, HistoryPanelFixture, FeedbackFixture,
     WebPageParams, ROUTE_NAMES, EXTERNAL_URLS, CloudBackupActionResult, CloudBackupFailureReason,
     CloudBackupMetadataStatus, CloudBackupIdentityStatus, CloudBackupDiagnostics,
     activeContexts: () => CloudBackupDiagnostics.recorder.operations.length });`, {
@@ -285,66 +287,89 @@ test('single production delete also removes locally complete records despite rej
 
 function feedbackFixture(detailed = true) {
   const f = environment(detailed);
-  const pushes = [];
   const page = Object.assign(new f.api.DetailsFixture(), {
     isMounted: true, isLoading: false, isRetryingCleanup: false, confirmationOpen: false,
     serviceBusy: false, cleanupPending: false, lastFailure: { knownReason: true, reason: 'POST_VERIFY_FAILED' },
-    pageInfos: { pushPathByName: (...args) => pushes.push(args) },
+    isFeedbackSheetVisible: false,
   });
-  return { ...f, page, pushes };
+  return { ...f, page };
 }
 
-test('production feedback action pushes the registered setting/feedback route with no business payload', () => {
+test('production feedback action opens the in-sheet feedback panel with no business payload', () => {
   const f = feedbackFixture();
   f.page.openFeedback();
-  assert.deepEqual(f.pushes, [[f.api.ROUTE_NAMES.SettingFeedback, null]]);
+  assert.equal(f.page.isFeedbackSheetVisible, true);
   assert.equal(f.api.ROUTE_NAMES.SettingFeedback, 'setting/feedback');
   assert.match(resultLine(f), /result=OK reason=NONE.*uiAction=FEEDBACK/);
   assert.equal(f.api.activeContexts(), 0);
   assert.match(details, /\.onClick\(\(\) => this\.openFeedback\(\)\)/);
 });
 
-test('feedback blockers and failed route pushes cannot leak errors or leave a live diagnostic context', () => {
+test('feedback blockers cannot open the panel and never leave a live diagnostic context', () => {
   for (const flag of ['isMounted', 'isLoading', 'isRetryingCleanup', 'confirmationOpen', 'serviceBusy', 'cleanupPending',
-    'lastFailure', 'pageInfos', 'throw']) {
+    'lastFailure']) {
     const f = feedbackFixture();
-    if (flag === 'throw') f.page.pageInfos.pushPathByName = () => { throw new Error(SENTINEL); };
-    else if (['lastFailure', 'pageInfos'].includes(flag)) f.page[flag] = null;
+    if (flag === 'lastFailure') f.page[flag] = null;
     else f.page[flag] = flag !== 'isMounted';
     f.page.openFeedback();
-    assert.equal(f.pushes.length, 0);
+    assert.equal(f.page.isFeedbackSheetVisible, false);
     assert.equal(f.api.activeContexts(), 0);
-    assert.match(resultLine(f), flag === 'throw' ? /result=FAIL/ : /result=BLOCKED/);
+    assert.match(resultLine(f), /result=BLOCKED/);
     assert.equal(f.lines.join('\n').includes(SENTINEL), false);
   }
 });
 
-test('actual private-stack builder wraps lazy FeedbackSheet in a valid destination with a reachable return', () => {
+test('actual sheet builder auto-pushes only the sync details root without animation and clears on hide', () => {
   const f = environment();
   const paths = [];
-  const stack = { pushPathByName: (...args) => paths.push(args[0]), pop: () => paths.pop(), clear: () => { paths.length = 0; } };
+  const stack = { pushPathByName: (...args) => paths.push(args), pop: () => paths.pop(), clear: () => { paths.length = 0; } };
   const page = Object.assign(new f.api.SheetFixture(), { pageInfos: stack, scrollEffectType: 'synthetic-effect', onClose() {} });
   page.aboutToAppear();
-  assert.deepEqual(paths, [f.api.ROUTE_NAMES.ShowCloudSyncDetailsPage]);
-  stack.pushPathByName(f.api.ROUTE_NAMES.SettingFeedback, null);
-  page.Destination(paths.at(-1), null);
-  const destination = f.components.find(item => item.name === 'HdsNavDestination');
-  const content = f.components.find(item => item.name === 'FeedbackSheet');
-  const back = f.components.find(item => item.name === 'Button');
-  assert.ok(destination && content && back);
-  assert.deepEqual(plain(destination.attributes.hideTitleBar), [true]);
-  assert.deepEqual(plain(content.props), { scrollEffectType: 'synthetic-effect', embedded: true });
-  assert.equal('pageInfos' in content.props, false); // regular V2 属性不能初始化；也不与外 Navigation 双绑定。
-  assert.equal(back.props.key, 'app.string.cloud_backup_feedback_back');
-  back.attributes.onClick[0]();
-  assert.deepEqual(paths, [f.api.ROUTE_NAMES.ShowCloudSyncDetailsPage]);
-  stack.pushPathByName(f.api.ROUTE_NAMES.SettingFeedback, null);
-  assert.equal(destination.attributes.onBackPressed[0](), true);
-  assert.deepEqual(paths, [f.api.ROUTE_NAMES.ShowCloudSyncDetailsPage]);
+  assert.deepEqual(paths, [[f.api.ROUTE_NAMES.ShowCloudSyncDetailsPage, null, false]]);
+  page.Destination(f.api.ROUTE_NAMES.ShowCloudSyncDetailsPage, null);
+  const content = f.components.find(item => item.name === 'ShowCloudSyncDetailsPage');
+  assert.ok(content);
+  assert.equal(content.props.scrollEffectType, 'synthetic-effect');
+  assert.equal(content.props.inMaterialSheet, true);
+  assert.equal(content.props.sheetRoot, true);
+  assert.equal(typeof content.props.onCloseSheet, 'function');
   page.aboutToDisappear();
   assert.deepEqual(paths, []);
-  assert.match(sheet, /import lazy \{ FeedbackSheet \} from '\.\/FeedbackSheet'/);
+  assert.doesNotMatch(sheet, /backFromFeedback|SettingFeedback|ShowCloudBackupHistoryPage/);
   assert.match(sheet, /HdsNavigation\(this\.pageInfos\)[\s\S]*\.navDestination\(this\.Destination\)/);
+});
+
+test('history panel wrapper keeps an isolated animation-free stack and closes its own panel', () => {
+  const f = environment();
+  const paths = [];
+  let closed = 0;
+  const stack = { pushPathByName: (...args) => paths.push(args), pop: () => paths.pop(), clear: () => { paths.length = 0; } };
+  const page = Object.assign(new f.api.HistoryPanelFixture(), {
+    pageInfos: stack, scrollEffectType: 'synthetic-effect', onClose() { closed++; },
+  });
+  page.aboutToAppear();
+  assert.deepEqual(paths, [[f.api.ROUTE_NAMES.ShowCloudBackupHistoryPage, null, false]]);
+  page.Destination(f.api.ROUTE_NAMES.ShowCloudBackupHistoryPage, null);
+  const content = f.components.find(item => item.name === 'ShowCloudBackupHistoryPage');
+  assert.ok(content);
+  assert.equal(content.props.scrollEffectType, 'synthetic-effect');
+  assert.equal(content.props.inMaterialSheet, true);
+  assert.equal(content.props.sheetRoot, true);
+  assert.equal(typeof content.props.onCloseSheet, 'function');
+  content.props.onCloseSheet();
+  assert.equal(closed, 1);
+  page.aboutToDisappear();
+  assert.deepEqual(paths, []);
+});
+
+test('history and feedback open as bottom sheets on the sync details page without side-slide pushes', () => {
+  assert.match(details, /import lazy \{ CloudBackupHistorySheet, cloudBackupHistorySheetOptions \} from '\.\/setting\/CloudBackupHistorySheet'/);
+  assert.match(details, /import lazy \{ FeedbackSheet \} from '\.\/setting\/FeedbackSheet'/);
+  assert.match(details, /bindSheet\(\$\$this\.isHistorySheetVisible, this\.HistorySheetContent\(\), this\.historySheetOptions\(\)\)/);
+  assert.match(details, /bindSheet\(\$\$this\.isFeedbackSheetVisible, this\.FeedbackSheetContent\(\), this\.feedbackSheetOptions\(\)\)/);
+  assert.match(details, /FeedbackSheet\(\{ scrollEffectType: this\.scrollEffectType, embedded: false \}\)/);
+  // 侧滑 push 是沉浸光感残留的触发条件（透明背板页被侧滑推入）；详情页内禁止回归。
+  assert.doesNotMatch(details, /pushPathByName/);
 });
 
 test('reused FeedbackSheet independently registers its real WebPage target and preserves survey parameters', () => {

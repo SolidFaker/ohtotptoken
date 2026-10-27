@@ -49,3 +49,4 @@ openspec/
 # AI 会话本地产物
 .codegenie/
 .local/
+.zcode-tmp/

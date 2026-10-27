@@ -258,7 +258,6 @@ export struct AddTotpTokenPage {
                   ])
                     .selected(this.tokenType === otpType.HOTP ? 1 : 0)
                     .value(this.tokenType === otpType.HOTP ? 'HOTP' : 'TOTP')
-                    .systemMaterial(MaterialTheme.systemMaterial(true))
                     .menuSystemMaterial(MaterialTheme.systemMaterial())
                     .onSelect((index: number) => this.tokenType = index === 1 ? otpType.HOTP : otpType.TOTP)
                 }
@@ -280,7 +279,6 @@ export struct AddTotpTokenPage {
                   ])
                     .selected(this.algorithms.indexOf(this.algorithm))
                     .value(this.algorithm)
-                    .systemMaterial(MaterialTheme.systemMaterial(true))
                     .menuSystemMaterial(MaterialTheme.systemMaterial())
                     .onSelect((_: number, value: string) => this.algorithm = value as HMACAlgorithm)
                 }
@@ -298,7 +296,6 @@ export struct AddTotpTokenPage {
                   ])
                     .selected(this.digits === 4 ? 0 : this.digits === 8 ? 2 : 1)
                     .value(this.digits.toString())
-                    .systemMaterial(MaterialTheme.systemMaterial(true))
                     .menuSystemMaterial(MaterialTheme.systemMaterial())
                     .onSelect((_: number, value: string) => this.digits = Number.parseInt(value))
                 }
@@ -315,7 +312,6 @@ export struct AddTotpTokenPage {
                     .width('100%').justifyContent(FlexAlign.SpaceBetween)
                     Slider({ min: 1, max: 60, value: this.period, step: 1, style: SliderStyle.InSet })
                       .width('100%')
-                      .systemMaterial(MaterialTheme.systemMaterial(true))
                       .onChange((value: number) => this.period = Math.round(value))
                   }
                 } else {

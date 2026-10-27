@@ -6,8 +6,11 @@
     "mainElement": "EntryAbility",
     "metadata": [
       {
+        // default 模式：Toggle/Select/Slider 等内容区控件不再默认开沉浸材质
+        // （材质预设白色点光源在暗色下遮挡控件配色，且内容区不在官方允许生效区域）。
+        // 材质仅保留在允许区域：对话框/菜单/标题栏/半模态，由应用显式设置。
         "name": "ohos.arkui.UIMaterial.state",
-        "value": "enable"
+        "value": "default"
       },
       {
         "name": "appgallery_privacy_hosted",

@@ -1,5 +1,5 @@
 import { AppWindowInfo } from 'common';
-import { MaterialTheme } from './MaterialTheme';
+
 import { AppStorageV2 } from "@kit.ArkUI";
 import { SETTING_ROW_MIN_HEIGHT, SETTING_ROW_PADDING, SETTING_ROW_ICON_OFFSET } from './SettingStyle';
 
@@ -100,7 +100,6 @@ export struct SubItemSlider {
               step: item.step
             })
               .width('60%')
-              .systemMaterial(MaterialTheme.systemMaterial(true))
               //.enableHapticFeedback(true)
               .showTips(true, this.tips_value[index].toFixed())
               .sliderInteractionMode(SliderInteraction.SLIDE_AND_CLICK_UP)

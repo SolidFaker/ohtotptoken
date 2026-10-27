@@ -77,11 +77,11 @@ export struct SubItemSelect {
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
 
+        // 触发器不挂沉浸材质（内容区非官方允许生效区域）；下拉菜单保持材质。
         Select(this.values.map((val: string | Resource) => {return { value: val as string } as SelectOption }))
           .enabled(!this.disable)
           .value(this.values[this.selected])
           .selected(this.selected)
-          .systemMaterial(MaterialTheme.systemMaterial(true))
           .menuSystemMaterial(MaterialTheme.systemMaterial())
           .onSelect((index) => {
             this.onChange(index);

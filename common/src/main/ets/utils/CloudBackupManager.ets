@@ -767,6 +767,7 @@ export class CloudBackupManager {
       const result = new CloudBackupActionResult();
       result.success = true;
       result.localComplete = true;
+      result.restoredCount = payload.tokens.length;
       return result;
     } catch (_) {
       const result = cloudBackupFailure(CloudBackupFailureReason.WRITE_FAILED);

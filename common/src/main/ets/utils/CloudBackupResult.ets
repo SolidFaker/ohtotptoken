@@ -30,6 +30,8 @@ export class CloudBackupActionResult {
   deletedCount: number = 0;
   /** 清理操作因归属无法确认而跳过并保留的记录数 */
   skippedUnowned: number = 0;
+  /** 恢复操作实际合并写入的令牌数（非恢复操作恒为 0） */
+  restoredCount: number = 0;
 }
 
 export function cloudBackupFailure(reason: CloudBackupFailureReason): CloudBackupActionResult {

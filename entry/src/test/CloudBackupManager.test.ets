@@ -828,12 +828,23 @@ export default function cloudBackupManagerTest() {
       await seedBackup(rig, 6000, payload, 'odid-A');
 
       // 恢复最新（6000）
-      const result = await CloudBackupManager.getInstance().restoreFromCloud();
-      expect(result).assertTrue();
+      const result = await CloudBackupManager.getInstance().restoreFromBackupRecordResult(backupFileName(6000));
+      expect(result.success).assertTrue();
+      expect(result.restoredCount).assertEqual(1);
       expect(rig.tokens.updated.length).assertEqual(1);
       expect(rig.tokens.updated[0].TokenUUID).assertEqual('u1');
       expect(rig.tokens.updated[0].TokenSecret).assertEqual('restored_secret');
       expect(rig.groups.mergedGroups !== null && rig.groups.mergedGroups!.length === 1).assertTrue();
+    });
+
+    it('restore_empty_payload_succeeds_with_zero_restored_count', 0, async () => {
+      const rig = freshRig();
+      await seedBackup(rig, 5100, '{"tokens":[],"groups":[],"enabledPacks":[]}', 'odid-A');
+
+      const result = await CloudBackupManager.getInstance().restoreFromBackupRecordResult(backupFileName(5100));
+      expect(result.success).assertTrue();
+      expect(result.restoredCount).assertEqual(0);
+      expect(rig.tokens.updated.length).assertEqual(0);
     });
 
     it('restore_legacy_array_payload_skips_group_merge', 0, async () => {

@@ -12,7 +12,7 @@ import {
   SegmentButtonV2Items,
   TabSegmentButtonV2
 } from '@kit.ArkUI';
-import { IconPicker, IconPickerViewState } from 'uikit';
+import { IconPackDescriptor, IconPicker, IconPickerPerf, IconPickerViewState } from 'uikit';
 import { AegisIconPack, AppWindowInfo, TokenIconPacks } from 'common';
 import { MaterialTheme } from '../components/MaterialTheme';
 import { PageScaffold } from '../components/PageScaffold';
@@ -28,12 +28,6 @@ export class IconPickerPageParams {
     this.currentIconPath = currentIconPath;
     this.onSelected = onSelected;
   }
-}
-
-function createIconScrollers(): Scroller[] {
-  const scrollers: Scroller[] = [new Scroller()];
-  TokenIconPacks.aegis_icon_packs.forEach(() => scrollers.push(new Scroller()));
-  return scrollers;
 }
 
 function createIconPackSegmentItems(): SegmentButtonV2Items {
@@ -54,12 +48,20 @@ export struct IconPickerPage {
   @Local window: AppWindowInfo = AppStorageV2.connect(AppWindowInfo) as AppWindowInfo;
 
   private pageInfos: NavPathStack | null = null;
-  private iconScrollers: Scroller[] = createIconScrollers();
-  private packSegmentItems: SegmentButtonV2Items = createIconPackSegmentItems();
+  private scroller: Scroller = new Scroller();
+  @Local packSegmentItems: SegmentButtonV2Items = createIconPackSegmentItems();
+  @Local packCount: number = TokenIconPacks.aegis_icon_packs.length + 1;
 
   private completeSelection(path: string): void {
+    if (this.pickerViewState.pending) {
+      return;
+    }
     this.pageParams.onSelected(path);
     this.pageInfos?.pop();
+  }
+
+  aboutToDisappear(): void {
+    IconPickerPerf.notifyLeave();
   }
 
   @LocalBuilder
@@ -73,10 +75,10 @@ export struct IconPickerPage {
         .backgroundColor(MaterialTheme.surfaceBackground($r('sys.color.comp_background_tertiary')))
         .systemMaterial(MaterialTheme.systemMaterial(true))
         .onChange((value: string) => {
-          this.pickerViewState.searchText = value;
+          this.pickerViewState.search(value);
         })
         .onSubmit((value: string) => {
-          this.pickerViewState.searchText = value;
+          this.pickerViewState.search(value, true);
         })
     }
     .width('100%')
@@ -93,8 +95,7 @@ export struct IconPickerPage {
         selectedIndex: this.pickerViewState.packIndex,
         backgroundSystemMaterial: MaterialTheme.systemMaterial(true),
         $selectedIndex: (index: number) => {
-          this.pickerViewState.packIndex = index;
-          this.iconScrollers[index]?.scrollTo({ xOffset: 0, yOffset: 0 });
+          this.pickerViewState.selectPack(index);
         }
       })
     }
@@ -108,7 +109,7 @@ export struct IconPickerPage {
   TitleBottomBuilder() {
     Column() {
       this.SearchBottomBuilder()
-      if (TokenIconPacks.aegis_icon_packs.length > 0) {
+      if (this.packCount > 1) {
         this.PackSegmentBuilder()
       }
     }
@@ -124,11 +125,13 @@ export struct IconPickerPage {
           currentIconPath: this.pageParams.currentIconPath,
           showCancelButton: false,
           showSearch: false,
-          showPackTabs: false,
-          currentPackIndex: this.pickerViewState.packIndex,
-          iconScrollers: this.iconScrollers,
-          searchText: this.pickerViewState.searchText,
+          scroller: this.scroller,
           viewState: this.pickerViewState,
+          onPacksChanged: (packs: IconPackDescriptor[]) => {
+            const items: SegmentButtonV2ItemOptions[] = packs.map((pack: IconPackDescriptor): SegmentButtonV2ItemOptions => ({ text: pack.name }));
+            this.packSegmentItems = new SegmentButtonV2Items(items);
+            this.packCount = packs.length;
+          },
           confirm: (path: string) => this.completeSelection(path)
         })
           .width('100%')
@@ -173,16 +176,20 @@ export struct IconPickerPage {
         title: { mainTitle: $r('app.string.add_token_choose_icon') },
         bottomBuilder: {
           builder: (): void => this.TitleBottomBuilder(),
-          height: TokenIconPacks.aegis_icon_packs.length > 0 ? 112 : 56,
+          height: this.packCount > 1 ? 112 : 56,
           showType: BottomBuilderShowType.DIRECTLY_SHOW
         }
       }
     })
-    .bindToScrollable(this.iconScrollers)
+    .bindToScrollable([this.scroller])
     }
     .clip(false)
     .hideTitleBar(true)
     .backgroundColor($r('app.color.window_background'))
-    .onReady((context: NavDestinationContext) => this.pageInfos = context.pathStack)
+    .onReady((context: NavDestinationContext) => {
+      this.pageInfos = context.pathStack;
+      // 只读测量：open.contentReady 自页面 onReady 起算（守护亦自此点起算）。
+      IconPickerPerf.notifyPageReady(this.getUIContext());
+    })
   }
 }
