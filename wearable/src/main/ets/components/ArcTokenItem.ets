@@ -229,12 +229,6 @@ export struct ArcTokenItem {
             .fontSize(Math.min(this.token_preference.app_appearance_token_font_size, WATCH_TOKEN_FONT_SIZE_MAX))
             .fontWeight(this.token_preference.app_appearance_token_font_weight)
             .fontFamily(AppFonts.CODE_FONT)
-            .gesture(
-              LongPressGesture()
-                .onAction(() => {
-                  copyText(this.TokenNumber, `token ${this.TokenNumber} `+ this.getUIContext().getHostContext()?.resourceManager.getStringSync($r('app.string.token_copied').id));
-                })
-            )
           if (this.Config.TokenType == otpType.HOTP) {
             Text(this.TokenCounter + (this.token_preference.app_appearance_show_next_token_enable ? ":" + this.TokenNumberNext : ""))
               .textAlign(TextAlign.Center)

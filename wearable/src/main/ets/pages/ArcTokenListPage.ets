@@ -193,11 +193,6 @@ export struct ArcTokenListPage {
             }
             .padding({ left: 10, right: 10 })
             .swipeAction({
-              start: {
-                builder: () => {
-                  this.TokenItemStart(token, index)
-                }
-              },
               end: {
                 builder: () => {
                   this.TokenItemEnd(token)
@@ -224,37 +219,6 @@ export struct ArcTokenListPage {
     })
   }
 
-  private openQRCodeDialog(conf: TokenConfig): void {
-    this.getUIContext().getPromptAction().openCustomDialog({
-      builder: () => {
-        this.QRCodeDialogBuilder(conf);
-      }
-    }).catch((error: BusinessError) => {
-      hilog.error(error.code, 'ArcTokenListPage', `open QR code dialog failed: ${error.message}`);
-    });
-  }
-
-  @Builder
-  TokenItemStart(conf: TokenConfig, index: number) {
-    Row({ space: 10 }) {
-      Button({ type: ButtonType.Circle }) {
-        Text() {
-          SymbolSpan($r('sys.symbol.qrcode'))
-            .fontSize(30)
-            .fontWeight(FontWeight.Medium)
-            .fontColor([Color.White])
-        }
-      }
-      .backgroundColor(Color.Orange)
-      .padding(10)
-      .onClick(() => {
-        this.openQRCodeDialog(conf);
-      })
-    }
-    .margin({ right: 10 })
-    .width(50)
-  }
-
   @Builder
   TokenItemEnd(conf: TokenConfig) {
     Row({ space: 10 }) {
@@ -271,8 +235,8 @@ export struct ArcTokenListPage {
       .margin({ left: 5 })
       .onClick(async () => {
         this.getUIContext().showAlertDialog({
-          title: $r('app.string.alert_remove_title', conf.TokenIssuer),
-          subtitle: conf.TokenName,
+          //title: $r('app.string.alert_remove_title', conf.TokenIssuer),
+          //subtitle: conf.TokenName,
           message: $r('app.string.alert_remove_confirm_msg'),
           autoCancel: true,
           alignment: DialogAlignment.Center,
